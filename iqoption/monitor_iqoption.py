@@ -199,7 +199,7 @@ class IQMonitorApp(MonitorApp):
         interval = self.interval_var.get()
 
         self.detector   = PatternDetector(self.patterns, interval,
-                                          use_entry_minutes=interval == self.patterns_interval)
+                                          use_entry_minutes=self._use_entry_minutes(interval))
         self.close_time = None
         self._draw_strip()
 

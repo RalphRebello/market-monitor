@@ -107,15 +107,17 @@ class PatternDetector:
         self.interval_ms       = INTERVAL_MS[interval]
         self.use_entry_minutes = use_entry_minutes
         self.max_candles       = max_candles
-        self.candles     = {}   # open_time -> candle fechado
-        self.pending     = []   # sinais aguardando o fechamento do candle de entrada
+        self.candles     = {}      # open_time -> candle fechado
+        self.pending     = []      # sinais aguardando o fechamento do candle de entrada
+        self.signaled    = set()   # (padrao, entrada) ja sinalizados, ao vivo ou no historico
 
     def reset(self):
         self.candles.clear()
         self.pending.clear()
+        self.signaled.clear()
 
     def load_history(self, candles):
-        """Carrega candles fechados sem disparar sinais (sinais atrasados nao servem)."""
+        """Carrega candles fechados sem disparar sinais (sinais atrasados nao servem; ver history_signals)."""
         for candle in candles:
             if candle['is_closed']:
                 self.candles[candle['open_time']] = candle
@@ -137,12 +139,26 @@ class PatternDetector:
 
         return signals, results
 
-    def last_colors(self, count):
-        """Cores dos ultimos candles fechados consecutivos (mais antigo primeiro)."""
+    def history_signals(self):
+        """Padroes ja formados nos candles carregados, que nao geram alerta.
+
+        Retorna [(sinal, candle_de_entrada ou None)]; None quando a entrada ainda nao fechou.
+        Cada padrao/entrada so e informado uma vez, mesmo que o historico seja recarregado.
+        """
+        found = []
+
+        for open_time in sorted(self.candles):
+            for signal in self._find_signals(open_time + self.interval_ms):
+                found.append((signal, self.candles.get(signal.entry_open_time)))
+
+        return found
+
+    def last_colors(self, count, last_open_time=None):
+        """Cores dos candles fechados consecutivos ate last_open_time (padrao: o mais recente)."""
         if not self.candles:
             return ''
 
-        open_time = max(self.candles)
+        open_time = max(self.candles) if last_open_time is None else last_open_time
         colors    = []
 
         while len(colors) < count and open_time in self.candles:
@@ -151,14 +167,32 @@ class PatternDetector:
 
         return ''.join(reversed(colors))
 
+    def forming_patterns(self):
+        """Padroes cujo gatilho bate com os ultimos candles fechados; a entrada e o proximo candle."""
+        if not self.candles:
+            return []
+
+        entry_open_time = max(self.candles) + self.interval_ms
+
+        return [pattern for pattern in self.patterns
+                if (not self.use_entry_minutes or pattern.matches_time(entry_open_time))
+                and self.last_colors(len(pattern.trigger)) == pattern.trigger]
+
     def _find_signals(self, entry_open_time):
         signals = []
 
         for pattern in self.patterns:
+            key = (pattern.name, entry_open_time)
+
+            if key in self.signaled:
+                continue
+
             if self.use_entry_minutes and not pattern.matches_time(entry_open_time):
                 continue
 
-            if self.last_colors(len(pattern.trigger)) == pattern.trigger:
+            trigger_end = entry_open_time - self.interval_ms
+            if self.last_colors(len(pattern.trigger), trigger_end) == pattern.trigger:
+                self.signaled.add(key)
                 signals.append(Signal(pattern, entry_open_time))
 
         return signals

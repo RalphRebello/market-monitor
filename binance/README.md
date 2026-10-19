@@ -52,10 +52,12 @@ Rode **a partir da raiz do projeto**, como módulo (`-m`), para que os imports d
 │ Par: [BTC/USDT ▾] Tempo: [1m ▾] [Iniciar procura] [x] Alertas [x] Som│
 │ Conectado em BTC/USDT (1m)               Candle atual fecha em 18s   │
 │ ┌ Ultimos candles fechados ────────────────────────────────────────┐ │
-│ │ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■                          │ │
+│ │                 1 2 3 4 5 6 7 8 9                                │ │
+│ │ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ▲ Padrao 1 - CALL | entrada no...│ │
 │ └──────────────────────────────────────────────────────────────────┘ │
 │ ┌ Padroes carregados (1m) ─────────────────────────────────────────┐ │
-│ │ Padrao 1 - CALL:  R G G R R R G R  ->  COMPRA (CALL) | ... 2/7   │ │
+│ │ [ ] Exigir horario de entrada (minutos final 2/7, so em 1m)      │ │
+│ │ Padrao 1 - CALL:  R G G R R R G R  ->  COMPRA (CALL) | ...       │ │
 │ └──────────────────────────────────────────────────────────────────┘ │
 │ Sinais: 3   Win: 2   Loss: 1                                         │
 │ [12:08:39] SINAL: VENDA (PUT) em BTC/USDT | entrada 12:12 | Padrao 2 │
@@ -65,11 +67,12 @@ Rode **a partir da raiz do projeto**, como módulo (`-m`), para que os imports d
 | Controle | O que faz |
 |---|---|
 | **Par** | Escolhe o ativo. A lista traz **somente os pares ativos**: SPOT, em negociação (`TRADING`) e com pelo menos um negócio nas últimas 24h. Pares fora da lista são recusados. A lista é atualizada a cada 10 minutos. Os nomes aparecem como na Binance (`BTC/USDT`). Digite para filtrar (ex.: `BRL`); a busca aceita o nome com ou sem barra e em minúsculas (`btcusdt`, `BTC/USDT`). Use Enter ou selecione um item. Trocar o par com a procura ligada reinicia o monitoramento no novo par. |
-| **Tempo** | Tempo gráfico do candle: `1m`, `3m`, `5m`, `15m`, `30m` ou `1h`. Começa no `interval` do `patterns.json`. Trocar o tempo com a procura ligada reinicia o monitoramento. A regra de horário (`entry_minutes`, o "2/7") só vale no tempo do JSON; nos outros, os padrões são procurados só pelas cores, e a lista de padrões avisa isso. |
+| **Tempo** | Tempo gráfico do candle: `1m`, `3m`, `5m`, `15m`, `30m` ou `1h`. Começa no `interval` do `patterns.json`. Trocar o tempo com a procura ligada reinicia o monitoramento. A regra de horário (`entry_minutes`, o "2/7"), quando ligada, só vale no tempo do JSON; nos outros, os padrões são procurados só pelas cores, e a lista de padrões avisa isso. |
+| **Exigir horario de entrada** | Caixa no quadro de padrões. Desligada (padrão): os padrões valem em qualquer horário. Ligada: exige a [regra 2/7](#restrição-de-horário-27--opcional-desligada-por-padrão). Pode ser trocada com a procura em andamento. |
 | **Iniciar / Parar procura** | Liga e desliga a conexão em tempo real e a busca pelos padrões. Com a procura parada, nada é monitorado. |
 | **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde (COMPRA) ou vermelho (VENDA), que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
-| **Últimos candles fechados** | Os últimos 20 candles fechados como quadrados coloridos (verde, vermelho ou cinza para doji), do mais antigo para o mais recente. |
+| **Últimos candles fechados** | Os últimos 16 candles fechados como quadrados coloridos (verde, vermelho ou cinza para doji), do mais antigo para o mais recente. Os 8 mais recentes, que são os comparados com os padrões, ficam numerados de 1 a 8 sobre um fundo destacado. Depois deles vem o candle 9, o de entrada, ainda aberto, com contorno tracejado. Quando os 8 formam um padrão, o destaque fica amarelo e o 9 ganha a seta e a cor da operação (▲ verde CALL, ▼ vermelho PUT), com o nome do padrão ao lado. Só contam candles consecutivos: se faltar um candle, a numeração começa depois do buraco. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da Binance. |
 | **Sinais / Win / Loss** | Placar da sessão. Quando o candle de entrada fecha, o sinal é conferido: WIN se a cor bater com a direção indicada, LOSS caso contrário. |
 | **Histórico** | Todos os eventos com horário: conexão, sinais, resultados e erros. |
@@ -97,11 +100,20 @@ candles: os **8 primeiros são o gatilho** e o **9º é a entrada**, e a cor del
 
 `G` = candle verde (fechamento > abertura), `R` = candle vermelho (fechamento < abertura).
 
-### Restrição de horário (2/7)
+### Restrição de horário (2/7) — opcional, desligada por padrão
 
-Nas imagens, o candle 4 está marcado com **2/7** e o candle 9 com **7/2**. O monitor interpreta isso como
-horário no gráfico de 1 minuto: o candle 4 abre num minuto terminado em 2 ou 7 e, cinco candles depois, a
-entrada abre no outro (7 ou 2).
+> Por padrão os padrões são procurados **só pelas cores, em qualquer horário**. A regra de horário é ligada
+> pela caixa **Exigir horario de entrada**, no quadro de padrões, e pode ser ligada/desligada com a procura
+> em andamento. Para que ela já comece ligada, mude `DEFAULT_ENTRY_MINUTES` para `True` em
+> `binance/monitor_patterns.py`.
+>
+> Ela começou ligada nas primeiras versões, mas um Padrão 1 real no EUR/USD (gatilho 14:08–14:15, entrada
+> 14:16, WIN) não gerou alerta porque a entrada caiu num minuto terminado em 6. Por isso passou a ser
+> opcional.
+
+Nas imagens, o candle 4 está marcado com **2/7** e o candle 9 com **7/2**. Com a regra ligada, o monitor
+interpreta isso como horário no gráfico de 1 minuto: o candle 4 abre num minuto terminado em 2 ou 7 e,
+cinco candles depois, a entrada abre no outro (7 ou 2).
 
 ```
 candle:   1     2     3     4     5     6     7     8     9
@@ -179,10 +191,14 @@ binance_monitor/
 - `Signal`: padrão encontrado + `entry_open_time` (abertura do candle de entrada, em ms).
 - `PatternDetector(patterns, interval, use_entry_minutes)`: guarda até 200 candles fechados, indexados por
   `open_time`. É recriado a cada início de procura, com o tempo selecionado; `use_entry_minutes` só é
-  verdadeiro quando esse tempo é o `interval` do JSON.
+  verdadeiro quando a caixa **Exigir horario de entrada** está marcada **e** o tempo é o `interval` do JSON.
   - `load_history(candles)`: carrega o histórico **sem** gerar sinais.
+  - `history_signals()`: padrões já formados no histórico carregado, com o candle de entrada (para o
+    resultado), exibidos no histórico da janela como `Historico (sem alerta)`.
   - `add_closed_candle(candle)`: registra um candle fechado e devolve `(novos_sinais, resultados)`.
-  - `last_colors(n)`: cores dos últimos `n` candles **consecutivos**.
+  - `last_colors(n, last_open_time)`: cores de `n` candles **consecutivos** terminando em `last_open_time`
+    (padrão: o mais recente).
+  - `signaled`: pares (padrão, entrada) já informados, para nenhum padrão ser sinalizado duas vezes.
 
 **`monitor_patterns.py`**: aplicação.
 
@@ -286,10 +302,12 @@ Regras:
   de exatamente um intervalo). Um buraco no histórico interrompe a sequência.
 - **Doji não casa.** Um candle com abertura igual ao fechamento recebe a cor `D` e quebra qualquer padrão.
 - **Sinal no momento certo.** O alerta sai no fechamento do último candle do gatilho, ou seja, antes da
-  abertura do candle de entrada. O histórico carregado por REST **não** gera sinais, para não alertar uma
-  entrada que já passou.
+  abertura do candle de entrada. O histórico carregado ao iniciar a procura **não** gera alerta, para não
+  avisar de uma entrada que já passou; os padrões encontrados nele aparecem no histórico da janela como
+  `Historico (sem alerta): ... | entrada HH:MM | ... | candle G -> WIN` (ou `entrada em andamento`).
+  Assim dá para conferir que o monitor reconheceu um padrão que aconteceu antes de a procura começar.
 - **Sem duplicidade.** Se um candle já registrado chegar de novo (ex.: histórico recarregado após uma
-  reconexão), ele é ignorado.
+  reconexão), ele é ignorado, e cada padrão/entrada é informado uma única vez.
 - **Horário.** Os horários são exibidos em `America/Sao_Paulo`. A regra de minuto (`entry_minutes`) não é
   afetada pelo fuso, porque os fusos usados têm deslocamento em horas inteiras.
 
@@ -332,7 +350,7 @@ inicial e o tempo em que a regra de horário vale. Para oferecer outros tempos d
 | `<PAR> nao esta disponivel na Binance (SPOT)` | Par digitado errado ou inativo. Use o filtro da lista. |
 | `Conexao perdida ... Reconectando` em loop | Porta 9443 bloqueada por firewall/proxy, ou sem internet. |
 | `Binance API error: ... 429/418` | Limite de requisições excedido; aguarde alguns minutos. |
-| Nenhum sinal aparece | É o esperado na maior parte do tempo: o padrão exige 8 cores exatas **e** o minuto certo. Para testar, use `"entry_minutes": []` ou um padrão curto (ex.: `"G G G"`). Em tempos maiores (`15m`, `1h`), cada candle demora mais, então os sinais são bem mais raros. |
+| Nenhum sinal aparece | É o esperado na maior parte do tempo: o padrão exige 8 cores exatas (e o minuto certo, se **Exigir horario de entrada** estiver marcada). Padrões que aconteceram antes de iniciar a procura não alertam; veja as linhas `Historico (sem alerta)`. Para testar, use um padrão curto (ex.: `"G G G"`). Em tempos maiores (`15m`, `1h`), cada candle demora mais, então os sinais são bem mais raros. |
 | Sem som no alerta | O bipe usa o sino do sistema (`bell`), que pode estar desativado no ambiente gráfico. |
 
 ### Testando o detector sem a Binance

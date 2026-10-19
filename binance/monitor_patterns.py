@@ -13,7 +13,7 @@ from websockets.asyncio.client import connect
 
 from binance.monitor_resquests_REST_v0 import BinanceAPIError, get_candles, get_server_time_offset
 from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, RED, PatternDetector,
-                                   PatternError, load_patterns, ms_to_datetime)
+                                   PatternError, candle_color, load_patterns, ms_to_datetime)
 
 
 PATTERNS_FILE  = Path(__file__).resolve().parent.parent / 'patterns' / 'patterns.json'
@@ -24,6 +24,10 @@ DEFAULT_SYMBOL = 'BTC/USDT'
 HISTORY_LIMIT  = 30
 ALERT_SECONDS  = 30
 SYMBOLS_REFRESH_MS = 10 * 60 * 1000
+STRIP_CANDLES  = 16
+
+# Regra de horario de entrada (entry_minutes do patterns.json, ex.: 2/7) ligada ao abrir.
+DEFAULT_ENTRY_MINUTES = False
 
 COLORS = {
     GREEN : '#26a65b',
@@ -150,7 +154,8 @@ class MonitorApp:
 
         # O intervalo do JSON e o padrao e o unico em que entry_minutes (regra 2/7) se aplica.
         self.patterns_interval, self.patterns = load_patterns(PATTERNS_FILE)
-        self.detector = PatternDetector(self.patterns, self.patterns_interval)
+        self.detector = PatternDetector(self.patterns, self.patterns_interval,
+                                        use_entry_minutes=DEFAULT_ENTRY_MINUTES)
 
         self.events      = queue.Queue()
         self.stream      = None
@@ -165,6 +170,7 @@ class MonitorApp:
         self.interval_var = tk.StringVar(value=self.patterns_interval)
         self.alerts_var   = tk.BooleanVar(value=True)
         self.sound_var    = tk.BooleanVar(value=True)
+        self.minutes_var  = tk.BooleanVar(value=DEFAULT_ENTRY_MINUTES)
 
         self._build_ui()
         self._load_symbols()
@@ -212,11 +218,18 @@ class MonitorApp:
         strip = ttk.LabelFrame(self.root, text='Ultimos candles fechados', padding=6)
         strip.pack(fill='x', padx=10, pady=8)
 
-        self.strip = tk.Canvas(strip, height=46, background='#1f2630', highlightthickness=0)
+        self.strip = tk.Canvas(strip, height=58, background='#1f2630', highlightthickness=0)
         self.strip.pack(fill='x')
 
         self.patterns_frame = ttk.LabelFrame(self.root, text='Padroes carregados', padding=6)
         self.patterns_frame.pack(fill='x', padx=10)
+
+        minutes = sorted({m for pattern in self.patterns for m in pattern.entry_minutes})
+        if minutes:
+            ttk.Checkbutton(self.patterns_frame, variable=self.minutes_var,
+                            text=f'Exigir horario de entrada (minutos final '
+                                 f'{"/".join(str(m) for m in minutes)}, so em {self.patterns_interval})',
+                            command=self._on_minutes_toggled).pack(anchor='w', pady=(0, 4))
 
         self.pattern_labels = [ttk.Label(self.patterns_frame) for _ in self.patterns]
         for label in self.pattern_labels:
@@ -242,9 +255,22 @@ class MonitorApp:
         self.log.see('end')
         self.log.configure(state='disabled')
 
+    def _use_entry_minutes(self, interval):
+        """A regra de horario (entry_minutes) so vale se estiver ligada e no tempo do patterns.json."""
+        return self.minutes_var.get() and interval == self.patterns_interval
+
+    def _on_minutes_toggled(self):
+        if self.stream:
+            self.detector.use_entry_minutes = self._use_entry_minutes(self.stream.interval)
+
+        self._refresh_patterns()
+        self._draw_strip()
+        self.write_log('Regra de horario de entrada ' +
+                       ('ligada' if self.minutes_var.get() else 'desligada: qualquer horario'))
+
     def _refresh_patterns(self):
         interval      = self.interval_var.get()
-        check_minutes = interval == self.patterns_interval
+        check_minutes = self._use_entry_minutes(interval)
 
         self.patterns_frame.configure(text=f'Padroes carregados ({interval})')
 
@@ -254,6 +280,8 @@ class MonitorApp:
             elif check_minutes:
                 minutes = '/'.join(str(m) for m in pattern.entry_minutes)
                 timing  = f'entrada em minutos final {minutes}'
+            elif not self.minutes_var.get():
+                timing = 'entrada em qualquer horario (regra de horario desligada)'
             else:
                 timing = f'horario ignorado (regra so vale em {self.patterns_interval})'
 
@@ -265,12 +293,48 @@ class MonitorApp:
         self.stats_label.configure(text=f"Sinais: {s['signals']}   Win: {s['win']}   Loss: {s['loss']}")
 
     def _draw_strip(self):
+        """Candles fechados; os ultimos (gatilho) numerados 1..8 e o candle de entrada como 9."""
         self.strip.delete('all')
 
-        colors = self.detector.last_colors(20)
+        trigger_len = max(len(pattern.trigger) for pattern in self.patterns)
+        colors      = self.detector.last_colors(STRIP_CANDLES)
+        if not colors:
+            return
+
+        forming = self.detector.forming_patterns()
+        window  = min(trigger_len, len(colors))
+        first   = len(colors) - window
+        x0      = lambda i: 8 + i * 30
+
+        # Fundo destacando os candles comparados com os padroes (amarelo quando o padrao formou).
+        self.strip.create_rectangle(x0(first) - 4, 2, x0(len(colors)) - 4, 56, fill='#2c3746',
+                                    outline='#f1c40f' if forming else '', width=2)
+
         for i, color in enumerate(colors):
-            x = 8 + i * 30
-            self.strip.create_rectangle(x, 8, x + 22, 38, fill=COLORS[color], outline='')
+            x = x0(i)
+            self.strip.create_rectangle(x, 22, x + 22, 52, fill=COLORS[color], outline='')
+
+            if i >= first:
+                number = trigger_len - (len(colors) - 1 - i)
+                self.strip.create_text(x + 11, 12, text=str(number), fill='#e8e8e8',
+                                       font=('TkDefaultFont', 9, 'bold'))
+
+        # Candle de entrada (ainda aberto): contorno tracejado; seta e cor da operacao se o padrao formou.
+        x       = x0(len(colors))
+        outline = COLORS[forming[0].direction] if forming else '#8a8f98'
+
+        self.strip.create_text(x + 11, 12, text=str(trigger_len + 1), fill=outline,
+                               font=('TkDefaultFont', 9, 'bold'))
+        self.strip.create_rectangle(x, 22, x + 22, 52, outline=outline, dash=(3, 2), width=2)
+
+        if forming:
+            pattern = forming[0]
+            tip, base = (29, 45) if pattern.direction == GREEN else (45, 29)
+            self.strip.create_polygon(x + 4, base, x + 18, base, x + 11, tip, fill=outline)
+            self.strip.create_text(x + 32, 37, anchor='w', fill=outline,
+                                   font=('TkDefaultFont', 10, 'bold'),
+                                   text=f'{pattern.name}  |  entrada no candle {trigger_len + 1}: '
+                                        f'{DIRECTIONS[pattern.direction]}')
 
     # ------------------------------------------------------------- symbols
 
@@ -363,7 +427,7 @@ class MonitorApp:
         interval = self.interval_var.get()
 
         self.detector   = PatternDetector(self.patterns, interval,
-                                          use_entry_minutes=interval == self.patterns_interval)
+                                          use_entry_minutes=self._use_entry_minutes(interval))
         self.close_time = None
         self._draw_strip()
 
@@ -412,6 +476,7 @@ class MonitorApp:
                     self.time_offset = payload['time_offset']
                     self.detector.load_history(payload['candles'])
                     self._draw_strip()
+                    self._log_history_signals()
 
                 elif kind == 'kline':
                     self._on_kline(payload)
@@ -448,6 +513,20 @@ class MonitorApp:
             self._on_signal(signal)
 
         self._update_stats()
+
+    def _log_history_signals(self):
+        """Registra (sem alerta) os padroes que se formaram antes de a procura comecar."""
+        for signal, entry_candle in self.detector.history_signals():
+            entry = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+
+            if entry_candle is None:
+                outcome = 'entrada em andamento'
+            else:
+                color   = candle_color(entry_candle)
+                outcome = f"candle {color} -> {'WIN' if color == signal.direction else 'LOSS'}"
+
+            self.write_log(f'Historico (sem alerta): {signal.label} em {self.stream.name} | '
+                           f'entrada {entry} | {signal.pattern.name} | {outcome}')
 
     def _on_signal(self, signal):
         symbol = self.stream.name
