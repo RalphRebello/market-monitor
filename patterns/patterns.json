@@ -1,0 +1,36 @@
+{
+    "_doc": [
+        "candles: sequencia de 9 cores (G = verde/alta, R = vermelho/baixa) lida da esquerda para a direita.",
+        "Os 8 primeiros candles sao o gatilho; o 9o e a entrada: G = COMPRA (CALL), R = VENDA (PUT).",
+        "entry_minutes: ultimo digito do minuto de abertura do candle de entrada (9o).",
+        "As marcacoes 2/7 (candle 4) e 7/2 (candle 9) significam que a entrada ocorre em minutos terminados em 2 ou 7.",
+        "Deixe entry_minutes vazio ([]) para aceitar qualquer horario."
+    ],
+    "interval": "1m",
+    "patterns": [
+        {
+            "name": "Padrao 1 - CALL",
+            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM.jpeg",
+            "candles": "R G G R R R G R G",
+            "entry_minutes": [2, 7]
+        },
+        {
+            "name": "Padrao 2 - PUT",
+            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM (1).jpeg",
+            "candles": "G R R G G G R G R",
+            "entry_minutes": [2, 7]
+        },
+        {
+            "name": "Padrao 3 - CALL",
+            "image": "WhatsApp Image 2026-09-25 at 9.57.40 AM.jpeg",
+            "candles": "G R R G R R G R G",
+            "entry_minutes": [2, 7]
+        },
+        {
+            "name": "Padrao 4 - PUT",
+            "image": "WhatsApp Image 2026-09-25 at 9.57.40 AM (1).jpeg",
+            "candles": "R G G R G G R G R",
+            "entry_minutes": [2, 7]
+        }
+    ]
+}
