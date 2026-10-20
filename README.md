@@ -13,7 +13,7 @@ Monitores com interface gráfica que procuram, em tempo real, as sequências de 
 Nos dois monitores:
 
 - detecção dos padrões de `patterns/patterns.json` a cada candle fechado, com alerta (janela + som),
-  placar de sinais/WIN/LOSS e histórico;
+  placar de sinais/WIN/LOSS/empate com o acerto, e histórico;
 - faixa dos últimos candles, numerada como o gatilho (1..8) e a entrada (9);
 - regra opcional de horário de entrada (minutos final 2/7);
 - padrões que se formaram antes de a procura começar aparecem no histórico, sem alerta.

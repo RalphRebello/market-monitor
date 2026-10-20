@@ -59,7 +59,7 @@ Rode **a partir da raiz do projeto**, como módulo (`-m`), para que os imports d
 │ │ [ ] Exigir horario de entrada (minutos final 2/7, so em 1m)      │ │
 │ │ Padrao 1 - CALL:  R G G R R R G R  ->  COMPRA (CALL) | ...       │ │
 │ └──────────────────────────────────────────────────────────────────┘ │
-│ Sinais: 3   Win: 2   Loss: 1                                         │
+│ Sinais: 3   Win: 2   Loss: 1   Empate: 0   Acerto: 67%               │
 │ [12:08:39] SINAL: VENDA (PUT) em BTC/USDT | entrada 12:12 | Padrao 2 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -74,7 +74,7 @@ Rode **a partir da raiz do projeto**, como módulo (`-m`), para que os imports d
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
 | **Últimos candles fechados** | Os últimos 16 candles fechados como quadrados coloridos (verde, vermelho ou cinza para doji), do mais antigo para o mais recente. Os 8 mais recentes, que são os comparados com os padrões, ficam numerados de 1 a 8 sobre um fundo destacado. Depois deles vem o candle 9, o de entrada, ainda aberto, com contorno tracejado. Quando os 8 formam um padrão, o destaque fica amarelo e o 9 ganha a seta e a cor da operação (▲ verde CALL, ▼ vermelho PUT), com o nome do padrão ao lado. Só contam candles consecutivos: se faltar um candle, a numeração começa depois do buraco. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da Binance. |
-| **Sinais / Win / Loss** | Placar da sessão. Quando o candle de entrada fecha, o sinal é conferido: WIN se a cor bater com a direção indicada, LOSS caso contrário. |
+| **Sinais / Win / Loss / Empate / Acerto** | Placar da sessão. Quando o candle de entrada fecha, o sinal é conferido: WIN se fechar a favor da direção indicada, LOSS se fechar contra e EMPATE se fechar no preço de entrada (na opção binária o valor é devolvido). O acerto é WIN / (WIN + LOSS). |
 | **Histórico** | Todos os eventos com horário: conexão, sinais, resultados e erros. |
 
 ### Fluxo típico
@@ -84,7 +84,7 @@ Rode **a partir da raiz do projeto**, como módulo (`-m`), para que os imports d
 3. Clique em **Iniciar procura**. O status muda para `Conectado em <PAR> (<tempo>)`.
 4. Quando os 8 candles de gatilho de um padrão fecham no horário certo, o alerta aparece **antes** de o
    candle de entrada abrir: faça a entrada no candle indicado (`entrada HH:MM`).
-5. Quando o candle de entrada fecha, o histórico mostra o resultado (WIN/LOSS).
+5. Quando o candle de entrada fecha, o histórico mostra o resultado (WIN/LOSS/EMPATE).
 
 ## Padrões
 
@@ -287,7 +287,7 @@ sequenceDiagram
     App->>App: atualiza contagem regressiva
     WS->>App: kline (x=true), candle fechou
     App->>Det: add_closed_candle(candle)
-    Det->>Det: confere sinais pendentes cuja entrada é este candle → WIN/LOSS
+    Det->>Det: confere sinais pendentes cuja entrada é este candle → WIN/LOSS/EMPATE
     Det->>Det: para cada padrão: horário da próxima abertura em entry_minutes?<br/>últimas cores == gatilho?
     Det-->>App: (novos_sinais, resultados)
     App->>App: histórico + placar
@@ -369,6 +369,6 @@ for i, color in enumerate('RGGRRRGRG'):
     signals, results = detector.add_closed_candle(candle)
     for s in signals:
         print('sinal:', s.pattern.name, s.label)        # após o 8º candle → COMPRA (CALL)
-    for s, color, won in results:
-        print('resultado:', 'WIN' if won else 'LOSS')   # após o 9º candle → WIN
+    for s, entry_candle, outcome in results:
+        print('resultado:', outcome)                    # após o 9º candle → win (ou loss / tie)
 ```

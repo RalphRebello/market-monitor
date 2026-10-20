@@ -3,7 +3,6 @@ import json
 import queue
 import threading
 import tkinter as tk
-from pathlib import Path
 from time import time
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -12,11 +11,11 @@ import requests
 from websockets.asyncio.client import connect
 
 from binance.monitor_resquests_REST_v0 import BinanceAPIError, get_candles, get_server_time_offset
-from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, RED, PatternDetector,
-                                   PatternError, candle_color, load_patterns, ms_to_datetime)
+from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, LOSS, OUTCOMES, PATTERNS_FILE,
+                                   RED, WIN, PatternDetector, PatternError, candle_color, load_patterns,
+                                   ms_to_datetime, signal_outcome)
 
 
-PATTERNS_FILE  = Path(__file__).resolve().parent.parent / 'patterns' / 'patterns.json'
 WS_URL         = 'wss://stream.binance.com:9443/ws/{symbol}@kline_{interval}'
 EXCHANGE_INFO  = 'https://api.binance.com/api/v3/exchangeInfo'
 TICKER_24H     = 'https://api.binance.com/api/v3/ticker/24hr'
@@ -34,6 +33,23 @@ COLORS = {
     RED   : '#e5262d',
     DOJI  : '#8a8f98',
 }
+
+
+# Tag do historico para cada resultado (empate sem destaque).
+OUTCOME_TAGS = {
+    WIN  : 'buy',
+    LOSS : 'sell',
+}
+
+
+def new_stats():
+    return {'signals': 0, 'win': 0, 'loss': 0, 'tie': 0}
+
+
+def hit_rate(stats):
+    """Acerto sobre os sinais decididos (empates nao contam); None sem resultados."""
+    decided = stats['win'] + stats['loss']
+    return stats['win'] / decided if decided else None
 
 
 def normalize_symbol(text):
@@ -164,7 +180,7 @@ class MonitorApp:
         self.symbol_keys = {}    # normalize_symbol(nome) -> nome exibido
         self.time_offset = 0
         self.close_time  = None
-        self.stats       = {'signals': 0, 'win': 0, 'loss': 0}
+        self.stats       = new_stats()
 
         self.symbol_var   = tk.StringVar(value=DEFAULT_SYMBOL)
         self.interval_var = tk.StringVar(value=self.patterns_interval)
@@ -304,8 +320,11 @@ class MonitorApp:
                                  f'{DIRECTIONS[pattern.direction]}  |  {timing}')
 
     def _update_stats(self):
-        s = self.stats
-        self.stats_label.configure(text=f"Sinais: {s['signals']}   Win: {s['win']}   Loss: {s['loss']}")
+        s    = self.stats
+        rate = hit_rate(s)
+        self.stats_label.configure(text=f"Sinais: {s['signals']}   Win: {s['win']}   Loss: {s['loss']}   "
+                                        f"Empate: {s['tie']}" +
+                                        (f'   Acerto: {rate:.0%}' if rate is not None else ''))
 
     def _draw_strip(self):
         """Candles fechados; os ultimos (gatilho) numerados 1..8 e o candle de entrada como 9."""
@@ -496,7 +515,8 @@ class MonitorApp:
 
                 elif kind == 'history':
                     self.time_offset = payload['time_offset']
-                    self.detector.load_history(payload['candles'])
+                    self._log_results(self.detector.load_history(payload['candles']))
+                    self._update_stats()
                     self._draw_strip()
                     self._log_history_signals()
 
@@ -523,18 +543,19 @@ class MonitorApp:
 
         signals, results = self.detector.add_closed_candle(candle)
         self._draw_strip()
-
-        for signal, color, won in results:
-            outcome = 'WIN' if won else 'LOSS'
-            self.stats['win' if won else 'loss'] += 1
-            self.write_log(f'Resultado {signal.pattern.name}: candle {color} -> {outcome}',
-                           'buy' if won else 'sell')
+        self._log_results(results)
 
         for signal in signals:
             self.stats['signals'] += 1
             self._on_signal(signal)
 
         self._update_stats()
+
+    def _log_results(self, results):
+        for signal, candle, outcome in results:
+            self.stats[outcome] += 1
+            self.write_log(f'Resultado {signal.pattern.name}: candle {candle_color(candle)} -> '
+                           f'{OUTCOMES[outcome]}', OUTCOME_TAGS.get(outcome))
 
     def _log_history_signals(self):
         """Registra (sem alerta) os padroes que se formaram antes de a procura comecar."""
@@ -544,8 +565,8 @@ class MonitorApp:
             if entry_candle is None:
                 outcome = 'entrada em andamento'
             else:
-                color   = candle_color(entry_candle)
-                outcome = f"candle {color} -> {'WIN' if color == signal.direction else 'LOSS'}"
+                outcome = (f'candle {candle_color(entry_candle)} -> '
+                           f'{OUTCOMES[signal_outcome(signal, entry_candle)]}')
 
             self.write_log(f'Historico (sem alerta): {signal.label} em {self.stream.name} | '
                            f'entrada {entry} | {signal.pattern.name} | {outcome}')

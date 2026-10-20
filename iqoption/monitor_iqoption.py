@@ -3,42 +3,22 @@ import os
 import queue
 import threading
 import tkinter as tk
-from pathlib import Path
 from time import time
 from tkinter import ttk, messagebox
 
 from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, MAX_ASSETS, IQMultiStream,
                                       IQOptionError, IQSession, display_name)
-from binance.monitor_patterns import COLORS, PATTERNS_FILE, STRIP_CANDLES, MonitorApp, normalize_symbol
-from core.pattern_detector import (DIRECTIONS, GREEN, PatternDetector, PatternError, candle_color,
-                                   ms_to_datetime)
+from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
+from binance.monitor_patterns import (COLORS, OUTCOME_TAGS, PATTERNS_FILE, STRIP_CANDLES, MonitorApp,
+                                     hit_rate, new_stats, normalize_symbol)
+from core.pattern_detector import (DIRECTIONS, GREEN, OUTCOMES, PatternDetector, PatternError, candle_color,
+                                   ms_to_datetime, signal_outcome)
 
 
 DEFAULT_ASSET      = 'EUR/USD'
 DEFAULT_ASSET_TYPE = 'Opcoes binarias'
 ASSETS_REFRESH_MS  = 5 * 60 * 1000
-
-# Escolhas da janela (tipo, ativos, tempo, opcoes), restauradas ao abrir. Senha e e-mail nao sao gravados.
-SETTINGS_FILE = Path(os.environ.get('IQ_SETTINGS_FILE') or
-                     Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') /
-                     'monitor_padroes' / 'iqoption.json')
-
-
-def load_settings():
-    try:
-        settings = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return {}
-
-    return settings if isinstance(settings, dict) else {}
-
-
-def save_settings(settings):
-    """Grava num arquivo temporario e troca, para nao deixar um arquivo pela metade."""
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temp = SETTINGS_FILE.with_suffix('.tmp')
-    temp.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding='utf-8')
-    temp.replace(SETTINGS_FILE)
+LATE_SECONDS       = 3    # alerta que chega depois disso no candle de entrada mostra o atraso
 
 # Termometro: cor da barra conforme a fracao do gatilho ja formada (frio -> quente).
 HEAT_COLORS = ((0.5, '#3498db'), (0.75, '#f1c40f'), (1.0, '#e67e22'))
@@ -128,7 +108,13 @@ class AssetCard:
 
     def update_stats(self):
         s = self.app.asset_stats.get(self.name) if self.name else None
-        self.stats_label.configure(text=f"Sinais {s['signals']}  W {s['win']}  L {s['loss']}" if s else '')
+        if not s:
+            self.stats_label.configure(text='')
+            return
+
+        rate = hit_rate(s)
+        self.stats_label.configure(text=f"Sinais {s['signals']}  W {s['win']}  L {s['loss']}  E {s['tie']}" +
+                                        (f'  {rate:.0%}' if rate is not None else ''))
 
     def draw(self):
         canvas = self.canvas
@@ -500,7 +486,7 @@ class IQMonitorApp(MonitorApp):
         card.detector = PatternDetector(self.patterns, interval,
                                         use_entry_minutes=self._use_entry_minutes(interval))
         card.set_status('conectando...')
-        self.asset_stats.setdefault(name, {'signals': 0, 'win': 0, 'loss': 0})
+        self.asset_stats.setdefault(name, new_stats())
         self.cards_by_name[name] = card
 
     def _sync_stream(self):
@@ -730,12 +716,18 @@ class IQMonitorApp(MonitorApp):
 
                 if kind == 'history':
                     self.time_offset = payload['time_offset']
-                    card.detector.load_history(payload['candles'])
-                    self._log_history_signals(card)
+                    self._on_card_results(card, card.detector.load_history(payload['candles']))
+                    self._log_history_signals(card, next((c for c in payload['candles']
+                                                          if not c['is_closed']), None))
                     changed.add(card)
 
                 elif kind == 'kline':
-                    self._on_card_candle(card, payload['candle'])
+                    self.time_offset = payload['time_offset']
+                    self._on_card_candle(card, payload['candle'], payload.get('live'))
+                    changed.add(card)
+
+                elif kind == 'revised':
+                    self._on_card_revised(card, payload['candle'])
                     changed.add(card)
 
                 elif kind == 'asset':
@@ -754,55 +746,103 @@ class IQMonitorApp(MonitorApp):
 
         self.root.after(100, self._process_events)
 
-    def _on_card_candle(self, card, candle):
+    def _on_card_candle(self, card, candle, live=None):
         signals, results = card.detector.add_closed_candle(candle)
-        stats            = self.asset_stats[card.name]
-
-        for signal, color, won in results:
-            key = 'win' if won else 'loss'
-            self.stats[key] += 1
-            stats[key]      += 1
-            self.write_log(f'Resultado {card.name} | {signal.pattern.name}: candle {color} -> '
-                           f'{"WIN" if won else "LOSS"}', 'buy' if won else 'sell')
+        self._on_card_results(card, results)
 
         for signal in signals:
-            self.stats['signals'] += 1
-            stats['signals']      += 1
-            self._on_asset_signal(signal, card.name)
+            self._on_asset_signal(card, signal, live)
 
-    def _log_history_signals(self, card):
+    def _on_card_results(self, card, results):
+        stats = self.asset_stats[card.name]
+
+        for signal, candle, outcome in results:
+            if signal.counted:
+                self.stats[outcome] += 1
+                stats[outcome]      += 1
+
+            # Com o preco do alerta, o resultado e o de quem entrou ao receber o alerta, nao na abertura.
+            price = '' if signal.entry_price is None else (f' (entrada {signal.entry_price}, '
+                                                           f'fechou {candle["close"]})')
+
+            self.write_log(f'Resultado {card.name} | {signal.pattern.name}: candle {candle_color(candle)}'
+                           f'{price} -> {OUTCOMES[outcome]}' +
+                           ('' if signal.counted else ' (sinal perdido, fora do placar)'),
+                           OUTCOME_TAGS.get(outcome) if signal.counted else None)
+
+    def _on_card_revised(self, card, candle):
+        """A IQ Option mudou um candle depois de enviado: corrige o candle e os resultados conferidos nele."""
+        old_color, changed = card.detector.revise(candle)
+        when               = ms_to_datetime(candle['open_time']).strftime('%H:%M')
+        stats              = self.asset_stats[card.name]
+
+        if old_color is not None:
+            self.write_log(f'{card.name}: candle {when} corrigido pela IQ Option: {old_color} -> '
+                           f'{candle_color(candle)} (a busca dos padroes neste candle usou a cor antiga)', 'error')
+
+        for signal, before, after in changed:
+            if signal.counted:
+                for table in (self.stats, stats):
+                    table[before] -= 1
+                    table[after]  += 1
+
+            self.write_log(f'Resultado corrigido {card.name} | {signal.pattern.name}: candle {when} fechou em '
+                           f'{candle["close"]} -> {OUTCOMES[before]} virou {OUTCOMES[after]}', 'error')
+
+        if changed:
+            self._update_stats()
+
+    def _log_history_signals(self, card, live=None):
         """Padroes que se formaram antes de o ativo entrar na procura.
 
         Se o candle de entrada ainda esta aberto, ainda da para operar: vira um sinal com alerta (marcado
-        como em andamento) e o resultado e acompanhado. Os demais so vao para o historico, sem alerta.
+        com o atraso) e o resultado e acompanhado. Os demais so vao para o historico, sem alerta.
         """
         server_now = time() * 1000 - self.time_offset
 
         for signal, entry_candle in card.detector.history_signals():
-            entry     = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
-            closes_in = (signal.entry_open_time + card.detector.interval_ms - server_now) / 1000
+            in_progress = server_now < signal.entry_open_time + card.detector.interval_ms
 
-            if entry_candle is None and closes_in > 0:
+            if entry_candle is None and in_progress:
                 card.detector.follow(signal)
-                self.stats['signals']                += 1
-                self.asset_stats[card.name]['signals'] += 1
-                self._on_asset_signal(signal, card.name, closes_in=closes_in)
+                self._on_asset_signal(card, signal, live)
                 continue
 
+            entry = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+
             if entry_candle is None:
-                outcome = 'entrada em andamento'
+                outcome = 'sem o candle de entrada'
             else:
-                color   = candle_color(entry_candle)
-                outcome = f"candle {color} -> {'WIN' if color == signal.direction else 'LOSS'}"
+                outcome = (f'candle {candle_color(entry_candle)} -> '
+                           f'{OUTCOMES[signal_outcome(signal, entry_candle)]}')
 
             self.write_log(f'Historico (sem alerta): {signal.label} em {card.name} | '
                            f'entrada {entry} | {signal.pattern.name} | {outcome}')
 
-    def _on_asset_signal(self, signal, name, closes_in=None):
-        """closes_in: segundos ate o fim do candle de entrada, quando ele ja esta em andamento."""
-        entry = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
-        if closes_in is not None:
-            entry += f' (em andamento, fecha em {int(closes_in)}s)'
+    def _on_asset_signal(self, card, signal, live=None):
+        """Alerta de um sinal cujo candle de entrada esta aberto; se ja fechou, so registra (sem placar).
+
+        live: candle aberto recebido junto, com o preco no momento do alerta (usado no resultado).
+        """
+        name     = card.name
+        interval = card.detector.interval_ms / 1000
+        elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
+        entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+
+        if elapsed >= interval:
+            signal.counted = False
+            self.write_log(f'Sinal perdido (sem alerta): {signal.label} em {name} | entrada {entry} ja '
+                           f'fechou, {int(elapsed)}s atrasado | {signal.pattern.name}', 'error')
+            return
+
+        if live is not None and live['open_time'] == signal.entry_open_time:
+            signal.entry_price = live['close']
+
+        self.stats['signals']            += 1
+        self.asset_stats[name]['signals'] += 1
+
+        if elapsed > LATE_SECONDS:
+            entry += f' (atrasado {int(elapsed)}s, fecha em {int(interval - elapsed)}s)'
 
         self.write_log(f'SINAL: {signal.label} em {name} ({self.stream.interval}) | entrada {entry} | '
                        f'{signal.pattern.name}', 'buy' if signal.direction == GREEN else 'sell')

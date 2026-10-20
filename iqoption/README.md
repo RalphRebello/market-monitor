@@ -65,10 +65,37 @@ IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.m
    Trocar o **Tempo** ou o **Tipo** reinicia a procura de todos.
 7. Um padrão que já estava formado quando o ativo entrou na procura (ao iniciar, ao trocar o ativo ou
    ao recarregar o histórico depois de uma reconexão) **gera alerta se o candle de entrada ainda estiver
-   aberto**: `SINAL: ... | entrada 12:30 (em andamento, fecha em 85s)`. Ele conta no placar e o resultado
-   (WIN/LOSS) é registrado quando a entrada fecha. Se a entrada já fechou, ele só aparece no histórico como
-   `Historico (sem alerta)`, com o resultado. Os demais controles (alertas, som, placar, histórico) funcionam como no
+   aberto**. Se a entrada já fechou, ele só aparece no histórico como `Historico (sem alerta)`, com o
+   resultado. Os demais controles (alertas, som, placar, histórico) funcionam como no
    [monitor da Binance](../binance/README.md#como-usar).
+
+### Alertas no tempo certo
+
+- O alerta mostra o atraso quando chega mais de 3 s depois da abertura do candle de entrada:
+  `SINAL: ... | entrada 12:30 (atrasado 8s, fecha em 52s)`. Isso acontece, por exemplo, depois de uma
+  reconexão ou quando a IQ Option demora a entregar o candle fechado.
+- Se o candle de entrada **já fechou** quando o padrão chega (ex.: vários candles chegando juntos depois de
+  uma queda de conexão), não há alerta: o histórico mostra `Sinal perdido (sem alerta): ... ja fechou, Ns
+  atrasado`, e o resultado aparece como `(sinal perdido, fora do placar)`, sem contar no placar.
+- Quando o candle recém-fechado ainda não veio, o ativo é consultado de novo a cada 0,5 s nos primeiros
+  segundos (antes, a espera começava em 2 s), porque cada segundo de atraso come a entrada.
+
+### Placar e resultado
+
+- **Empate**: se o candle de entrada fecha no mesmo preço da entrada, a IQ Option devolve o valor. O
+  resultado aparece como `EMPATE` e não conta como WIN nem LOSS. O placar geral mostra
+  `Sinais / Win / Loss / Empate / Acerto` e o de cada cartão `Sinais W L E` com o acerto; o acerto
+  considera só WIN e LOSS.
+- **Preço do alerta**: junto com o candle fechado vem o candle que acabou de abrir, com o preço do momento
+  do alerta. O resultado compara o fechamento do candle de entrada com **esse preço** (o de quem entrou ao
+  receber o alerta), e não com a abertura do candle:
+  `Resultado EUR/USD | Padrao 1 - CALL: candle G (entrada 1.08412, fechou 1.08431) -> WIN`.
+- Se a conexão cai com um sinal aguardando o resultado e o histórico é recarregado, o resultado é
+  registrado a partir do histórico (antes ele se perdia).
+- **Candle corrigido**: cada candle é conferido de novo no lote seguinte. Se a IQ Option mudou o preço
+  depois (um tick atrasado), o candle é trocado pela versão final. Se a cor mudou, o histórico avisa
+  `candle 12:30 corrigido pela IQ Option: R -> G`; se um resultado já conferido mudou, o placar é corrigido
+  e aparece `Resultado corrigido ... WIN virou LOSS`.
 
 ### Escolhas salvas entre uma execução e outra
 
@@ -91,14 +118,14 @@ estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Res
 Cada ativo acompanhado tem um cartão com:
 
 - o campo do ativo, a situação (`ao vivo`, `sem cotacao recente (ativo fechado?)` ou o erro) e o placar
-  do ativo (`Sinais  W  L`, somado durante a sessão, mesmo que a procura seja reiniciada);
+  do ativo (`Sinais  W  L  E` e o acerto, somado durante a sessão, mesmo que a procura seja reiniciada);
 - a faixa dos últimos candles fechados, numerada como no monitor da Binance (gatilho 1..8 e entrada 9);
 - o termômetro dos padrões (abaixo).
 
 O cartão ganha borda amarela quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
 quantas couberem na largura da janela (um cartão precisa de cerca de 540 px) e se reorganizam ao
 redimensionar. A área dos cartões cresce até 55% da altura da janela; acima disso aparece uma barra de
-rolagem (também funciona a roda do mouse sobre os cartões). O placar geral (`Sinais / Win / Loss`), a
+rolagem (também funciona a roda do mouse sobre os cartões). O placar geral (`Sinais / Win / Loss / Empate`), a
 contagem regressiva e o histórico continuam únicos, com o nome do ativo em cada mensagem. Se vários ativos
 sinalizarem no mesmo candle, os alertas abrem em cascata para não se cobrirem.
 
@@ -127,6 +154,8 @@ binance_monitor/
 ├── iqoption/
 │   ├── monitor_iqoption.py       # GUI: IQMonitorApp (herda MonitorApp) + login + AssetCard
 │   ├── iqoption_client.py        # IQSession (conexão) + IQMultiStream (candles de até 20 ativos)
+│   ├── backtest.py               # backtest dos padrões com candles da IQ Option
+│   ├── settings.py               # escolhas salvas (sem depender da interface gráfica)
 │   ├── requirements.txt
 │   └── README.md                 # este documento
 │
@@ -187,9 +216,14 @@ flowchart LR
     reserva" com ativos possivelmente fechados).
   - `_request(atributo, envio)`: faz as consultas de digitais, forex, cripto e CFD com **timeout** (as
     funções da biblioteca usam pedidos desatualizados e repetem o pedido para sempre).
-  - `server_time()`: hora do servidor. Corrige um bug da biblioteca, que antes da primeira sincronização
-    devolve uma data de 1970 (e fazia todos os ativos parecerem fechados logo após o login): se a hora
-    estiver a mais de 1 h do relógio local, usa o relógio local.
+  - `server_time()`: hora do servidor. A biblioteca guarda a hora da última mensagem `timeSync`, que chega
+    a cada ~0,9 s; entre uma e outra o valor fica parado, atrasado em até ~1,5 s (medido). Por isso vale o
+    **menor** desvio entre o relógio local e o do servidor nos últimos 10 s, aplicado ao relógio local
+    (o desvio real medido foi ~0,1 s, a latência da rede). Também corrige um bug da biblioteca, que antes
+    da primeira sincronização devolve uma data de 1970: se a hora estiver a mais de 1 h do relógio local,
+    usa o relógio local.
+  - `get_payouts(tipo)`: payout de cada ativo (100% − comissão) nas binárias e blitz, a partir da mesma
+    lista de `get_assets`; usado pelo backtest.
   - `get_candles(active_id, size, count, end_time)`: reimplementa o `get_candles` da biblioteca com
     **timeout** (o original espera para sempre se a resposta não chegar). Funciona para todos os tipos,
     porque os candles são buscados pelo `active_id`.
@@ -211,9 +245,10 @@ flowchart LR
   2. pelo relógio do servidor, avisa a abertura de cada candle (para a contagem regressiva, comum a todos);
   3. 0,3 s depois de cada fechamento, busca num único lote os candles recém-fechados dos ativos que ainda
      não os receberam;
-  4. um ativo sem candle novo (mercado fechado ou atraso do servidor) é tentado de novo com espera
-     crescente (2 s, 4 s ... até 30 s), sem atrasar os outros; se faltarem mais de 3 candles (ex.: após uma
-     reconexão), o histórico do ativo é recarregado sem alertas;
+  4. um ativo sem candle novo é tentado de novo a cada 0,5 s nas 6 primeiras vezes (atraso do servidor) e
+     depois com espera crescente (2 s, 4 s ... até 30 s; mercado fechado), sem atrasar os outros; se
+     faltarem mais de 3 candles (ex.: após uma reconexão), o histórico do ativo é recarregado sem alertas;
+     o evento `kline` leva também o candle aberto (`live`), cujo preço é o do momento do alerta;
   5. `add_asset` / `remove_asset` (chamados pela GUI) incluem ou tiram um ativo com a procura ligada; a
      mudança é aplicada entre um lote e outro, e o ativo novo recebe o histórico no lote seguinte;
   6. se a conexão cair, reconecta com espera progressiva (1 s até 60 s). Conta como queda: o websocket
@@ -245,12 +280,44 @@ flowchart LR
 | `_sync_stream` / `_attach` | com a procura ligada, inclui/remove no stream só os ativos que mudaram |
 | `_log_history_signals` | padrão do histórico com a entrada ainda aberta vira sinal com alerta (`PatternDetector.follow` acompanha o resultado) |
 | `_process_events` | eventos por ativo; cada cartão alterado é redesenhado uma vez por rodada |
-| `_on_asset_signal` | sinal com o nome do ativo; alertas em cascata |
-| `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`) |
+| `_on_asset_signal` | sinal com o nome do ativo e o atraso; entrada já fechada vira `Sinal perdido`; guarda o preço do alerta; alertas em cascata |
+| `_on_card_results` | resultados WIN/LOSS/EMPATE no placar geral e no do cartão (sinais perdidos ficam fora) |
+| `_on_card_revised` | aplica um candle corrigido pela IQ Option, avisa se a cor mudou e corrige resultados já conferidos nele |
+| `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`, em `settings.py`) |
 | `on_close` | salva as escolhas e também fecha a sessão da IQ Option |
 
 Como depende de `MonitorApp`, mudanças futuras no monitor da Binance (nomes de métodos ou atributos como
 `interval_box`, `detector`, `stream`) podem afetar esta variação.
+
+## Backtest com os candles da IQ Option
+
+`iqoption/backtest.py` mede quanto os padrões acertaram nos ativos da própria IQ Option (inclusive OTC),
+usando o mesmo detector do monitor. Ele só lê candles: não opera nem grava nada.
+
+```bash
+.venv/bin/python -m iqoption.backtest                         # ativos salvos no monitor, últimos 7 dias
+.venv/bin/python -m iqoption.backtest --days 14 --entry-minutes
+.venv/bin/python -m iqoption.backtest --assets "EUR/USD (OTC),GBP/USD" --payout 0.85
+.venv/bin/python -m iqoption.backtest --all --days 3          # todos os ativos abertos do tipo
+```
+
+E-mail e senha vêm de `IQ_EMAIL`/`IQ_PASSWORD` ou são pedidos no terminal. Sem `--assets`/`--all`, usa o tipo
+e os ativos salvos pelo monitor. Os candles vêm em lotes de 1000 por ativo, todos os ativos juntos.
+
+O relatório mostra, no total, por padrão, por ativo e por hora da entrada:
+
+- sinais, WIN, LOSS, empates e o **acerto** (WIN / (WIN + LOSS)), com o **intervalo de 95%** (Wilson);
+- o acerto na 1ª e na 2ª metade do período (um padrão com vantagem real acerta nas duas);
+- `saldo/100`: lucro em unidades apostadas a cada 100 sinais, com o payout de cada ativo;
+- o veredito comparando com o **acerto mínimo** do payout (`1 / (1 + payout)`; ex.: 85% → 54,1%):
+  `ACIMA do equilibrio` só quando o intervalo inteiro fica acima.
+
+O payout vem da comissão informada pela IQ Option nas opções binárias (turbo para 1m e 5m); nos outros tipos,
+ou com `--payout`, vale o valor fixo (padrão 85%). O backtest entra na abertura do candle 9, que é o melhor
+caso: no monitor a entrada é alguns segundos depois.
+
+Cuidado ao filtrar ativos ou horários pelo resultado: com muitos recortes, alguns ficam acima do equilíbrio
+por acaso. Confirme rodando de novo com outro período antes de confiar.
 
 ## Diferenças em relação à Binance
 
@@ -271,6 +338,7 @@ Como depende de `MonitorApp`, mudanças futuras no monitor da Binance (nomes de 
 | `Sem resposta da IQ Option em 40s` | Rede bloqueada ou mudança no protocolo da IQ Option que a biblioteca não acompanha. |
 | `<ATIVO> sem cotacao recente (ativo fechado?)` | Mercado fechado (ex.: forex no fim de semana). Use a versão `-OTC` do ativo. |
 | `Nao foi possivel carregar os ativos` | O login funcionou, mas a lista falhou. Uma nova tentativa é feita a cada 5 minutos; ou clique em **Entrar** de novo. |
+| `Sinal perdido (sem alerta)` | O candle fechado chegou depois de a entrada fechar (conexão caiu ou a IQ Option atrasou). |
 | Padrão visível no gráfico do site, mas sem alerta | Se ele se formou **antes** de o ativo entrar na procura e o candle de entrada já fechou, não há alerta (a entrada já passou); ele aparece no histórico como `Historico (sem alerta)`, com o resultado. Se a entrada ainda estava aberta, há alerta, marcado como `em andamento`. Se aconteceu com a procura ligada, confira se **Exigir horario de entrada** está marcada (ela restringe a entrada aos minutos 2/7) e se o **Tipo** é o mesmo do gráfico: Forex e Blitz do mesmo par têm cotações ligeiramente diferentes, e um candle quase doji pode mudar de cor. |
 | `<ATIVO> nao esta aberto na IQ Option` | O ativo está fechado ou suspenso agora. Escolha um da lista. Se no site ele aparece aberto, gere o diagnóstico abaixo. |
 

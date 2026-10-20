@@ -3,6 +3,7 @@ import logging
 import os
 import queue
 import threading
+from collections import deque
 from itertools import count
 from time import sleep, time
 
@@ -46,6 +47,10 @@ CLOSE_FETCH_WAIT = 0.3    # espera apos o fechamento antes de buscar o candle fe
 MAX_ASSETS       = 20     # ativos acompanhados ao mesmo tempo
 REQUEST_PREFIX   = 'monitor-'    # request_id dos pedidos de candles deste monitor
 MAX_RETRY_WAIT   = 30     # espera maxima (s) para tentar de novo um ativo sem candle novo
+FAST_RETRY_WAIT  = 0.5    # logo apos o fechamento, tenta de novo rapido: cada segundo atrasa o alerta
+FAST_RETRIES     = 6
+MAX_CANDLES      = 1000   # candles por pedido aceitos pela IQ Option
+CLOCK_WINDOW     = 10     # segundos de amostras para acertar o relogio do servidor (timeSync ~1/s)
 
 
 class IQOptionError(Exception):
@@ -184,6 +189,9 @@ class IQSession:
         self.request_ids = count(1)
         self.pipeline    = True    # False se o servidor nao devolver o request_id nas respostas
         self.unmatched   = 0       # respostas de candles sem um request_id deste monitor
+        self.offsets     = deque()             # (hora local, hora local - hora do servidor)
+        self.clock_lock  = threading.Lock()
+        self.init_data   = None                # ultima lista de binarias/blitz (get_all_init_v2)
 
     @property
     def connected(self):
@@ -218,6 +226,10 @@ class IQSession:
     def server_time(self):
         """Hora do servidor da IQ Option, em segundos.
 
+        A biblioteca guarda a hora da ultima mensagem timeSync, que so chega de tempos em tempos: entre
+        uma e outra o valor fica parado e atrasado (ate ~1,5 s). Por isso vale o menor desvio entre o
+        relogio local e o do servidor visto nos ultimos CLOCK_WINDOW segundos, aplicado ao relogio local.
+
         Ate a primeira sincronizacao a biblioteca devolve time()/1000 (uma data de 1970);
         nesse caso, e em qualquer valor muito distante do relogio local, usa o relogio local.
         """
@@ -226,16 +238,50 @@ class IQSession:
         except Exception as error:
             raise IQOptionError(f'Falha ao ler a hora do servidor: {error}') from error
 
-        if abs(server - time()) > 3600:
-            return time()
+        now = time()
+        if abs(server - now) > 3600:
+            return now
 
-        return server
+        with self.clock_lock:
+            self.offsets.append((now, now - server))
+
+            while self.offsets[0][0] < now - CLOCK_WINDOW:
+                self.offsets.popleft()
+
+            return now - min(offset for _, offset in self.offsets)
+
+    def _init_data(self):
+        with self.lock:
+            self.init_data = run_with_timeout(self.api.get_all_init_v2, REQUEST_TIMEOUT + 30)
+
+        return self.init_data
+
+    def get_payouts(self, asset_type='binary'):
+        """Payout (0.87 = 87%) por ativo e prazo: {nome da API: {'binary': p, 'turbo': p}}.
+
+        So opcoes binarias e blitz informam a comissao na lista de ativos (reaproveita a ultima lista
+        baixada por get_assets); nos demais tipos devolve {}. Turbo e o prazo de 1 a 5 minutos; binary,
+        os prazos maiores.
+        """
+        if asset_type not in ('binary', 'blitz'):
+            return {}
+
+        payouts = {}
+
+        for option, name, _, active in init_actives(self.init_data or self._init_data() or {}, asset_type):
+            try:
+                commission = float(active['option']['profit']['commission'])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            payouts.setdefault(name, {})[option] = (100 - commission) / 100
+
+        return payouts
 
     def get_assets(self, asset_type='binary'):
         """Ativos de um tipo de ASSET_TYPES: {nome da API (EURUSD-OTC): (active_id, aberto)}."""
         if asset_type in ('binary', 'blitz'):
-            with self.lock:
-                data = run_with_timeout(self.api.get_all_init_v2, REQUEST_TIMEOUT + 30)
+            data = self._init_data()
         else:
             data = self._request('underlying_list_data', self._send_underlying_request, asset_type)
 
@@ -261,11 +307,8 @@ class IQSession:
             assets[name] = (int(active_id), is_open or was_open)
 
         if asset_type in ('binary', 'blitz'):
-            options = ('binary', 'turbo') if asset_type == 'binary' else ('blitz',)
-
-            for option in options:
-                for active_id, active in data[option]['actives'].items():
-                    add(str(active['name']).split('.')[-1], active_id, active_is_open(active, now))
+            for _, name, active_id, active in init_actives(data, asset_type, strict=True):
+                add(name, active_id, active_is_open(active, now))
 
         else:
             # Digitais vem em "underlying"; forex, cripto e CFD em "items".
@@ -421,6 +464,18 @@ class IQSession:
         wss.monitor_hooked = True
 
 
+def init_actives(data, asset_type, strict=False):
+    """Ativos de binarias/blitz da lista get_all_init_v2: (prazo, nome da API, active_id, dados).
+
+    O nome vem como "front.EURUSD-OTC". strict: falta de um prazo na lista e erro (KeyError).
+    """
+    for option in (('binary', 'turbo') if asset_type == 'binary' else ('blitz',)):
+        actives = data[option]['actives'] if strict else (data.get(option) or {}).get('actives', {})
+
+        for active_id, active in actives.items():
+            yield option, str(active['name']).split('.')[-1], active_id, active
+
+
 def candles_from_reply(reply):
     if reply is None:
         return NoReplyError('Sem resposta ao buscar candles')
@@ -437,7 +492,8 @@ class IQMultiStream(threading.Thread):
 
     Envia para a fila da GUI eventos (stream_id, tipo, dados):
       history  {'name', 'candles', 'time_offset'}  candles recentes do ativo (sem alerta)
-      kline    {'name', 'candle'}                  candle recem-fechado
+      kline    {'name', 'candle', 'live', 'time_offset'}  candle recem-fechado e o aberto (preco atual)
+      revised  {'name', 'candle'}                  candle ja enviado que mudou na IQ Option (versao final)
       open     {'close_time'}                      abertura de um candle (contagem regressiva)
       asset    {'name', 'text', 'error'}           situacao de um ativo
       status   texto                               situacao geral
@@ -460,6 +516,7 @@ class IQMultiStream(threading.Thread):
         self.retry_at    = dict.fromkeys(self.assets, 0)    # ms do servidor
         self.misses      = dict.fromkeys(self.assets, 0)
         self.asset_text  = dict.fromkeys(self.assets)
+        self.last_prices = dict.fromkeys(self.assets)    # (open, close) do ultimo candle enviado
 
     @property
     def name(self):
@@ -489,8 +546,10 @@ class IQMultiStream(threading.Thread):
                 self.retry_at[name]    = 0
                 self.misses[name]      = 0
                 self.asset_text[name]  = None
+                self.last_prices[name] = None
             else:
-                for table in (self.assets, self.last_closed, self.retry_at, self.misses, self.asset_text):
+                for table in (self.assets, self.last_closed, self.retry_at, self.misses, self.asset_text,
+                              self.last_prices):
                     table.pop(name, None)
 
     def emit(self, kind, payload=None):
@@ -513,7 +572,8 @@ class IQMultiStream(threading.Thread):
                     reconnect = False
 
                 self._apply_commands()
-                open_time = int(self.server_now() * 1000 // self.size_ms) * self.size_ms
+                self.offset = time() - self.session.server_time()    # amostra o relogio a cada volta
+                open_time   = int(self.server_now() * 1000 // self.size_ms) * self.size_ms
 
                 if open_time != current_open:
                     current_open = open_time
@@ -554,7 +614,6 @@ class IQMultiStream(threading.Thread):
 
     def _fetch(self, due, open_time):
         """Busca os candles dos ativos pendentes num unico lote de pedidos."""
-        self.offset = time() - self.session.server_time()
         now         = self.server_now()
         modes       = []
         requests    = []
@@ -578,22 +637,27 @@ class IQMultiStream(threading.Thread):
         for name, history, result in zip(due, modes, results):
             if isinstance(result, IQOptionError):
                 self._set_asset(name, str(result), error=True)
-                self._retry_later(name)
+                self._retry_later(name, fast=False)
                 continue
 
             candles = [iq_candle_to_candle(c, now) for c in result]
             last    = self.last_closed[name]
             closed  = sorted((c for c in candles if c['is_closed'] and (last is None or c['open_time'] > last)),
                              key=lambda c: c['open_time'])
+            live    = next((c for c in candles if not c['is_closed']), None)
 
             if history:
                 self.emit('history', {'name': name, 'candles': candles, 'time_offset': self.offset * 1000})
             else:
+                self._check_revision(name, candles)
+
                 for candle in closed:
-                    self.emit('kline', {'name': name, 'candle': candle})
+                    self.emit('kline', {'name': name, 'candle': candle, 'time_offset': self.offset * 1000,
+                                        'live': live if candle is closed[-1] else None})
 
             if closed:
                 self.last_closed[name] = closed[-1]['open_time']
+                self.last_prices[name] = (closed[-1]['open'], closed[-1]['close'])
                 self.misses[name]      = 0
                 self.retry_at[name]    = 0
             else:
@@ -606,9 +670,25 @@ class IQMultiStream(threading.Thread):
             else:
                 self._set_asset(name, 'ao vivo')
 
-    def _retry_later(self, name):
+    def _check_revision(self, name, candles):
+        """O lote seguinte traz de novo o ultimo candle enviado: se o preco mudou, envia a versao final.
+
+        O candle e lido logo apos o fechamento; um tick atrasado pode mudar o fechamento (e ate a cor).
+        """
+        last   = self.last_closed[name]
+        before = self.last_prices[name]
+        again  = next((c for c in candles if c['open_time'] == last and c['is_closed']), None)
+
+        if again is not None and before is not None and (again['open'], again['close']) != before:
+            self.last_prices[name] = (again['open'], again['close'])
+            self.emit('revised', {'name': name, 'candle': again})
+
+    def _retry_later(self, name, fast=True):
+        """fast: candle atrasado (tenta de novo logo); erro do ativo vai direto para a espera crescente."""
         self.misses[name]  += 1
-        wait                = min(2 * self.misses[name], MAX_RETRY_WAIT)
+        misses              = self.misses[name] if fast else self.misses[name] + FAST_RETRIES
+        wait                = (FAST_RETRY_WAIT if misses <= FAST_RETRIES
+                               else min(2 * (misses - FAST_RETRIES), MAX_RETRY_WAIT))
         self.retry_at[name] = (self.server_now() + wait) * 1000
 
     def _set_asset(self, name, text, error=False):

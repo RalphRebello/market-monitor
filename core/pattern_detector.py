@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 tz = ZoneInfo('America/Sao_Paulo')
 
+PATTERNS_FILE = Path(__file__).resolve().parent.parent / 'patterns' / 'patterns.json'
+
 GREEN = 'G'
 RED   = 'R'
 DOJI  = 'D'
@@ -14,6 +16,17 @@ DOJI  = 'D'
 DIRECTIONS = {
     GREEN : 'COMPRA (CALL)',
     RED   : 'VENDA (PUT)',
+}
+
+# Resultado de um sinal: na opcao binaria, fechar no mesmo preco da entrada devolve o valor (empate).
+WIN  = 'win'
+LOSS = 'loss'
+TIE  = 'tie'
+
+OUTCOMES = {
+    WIN  : 'WIN',
+    LOSS : 'LOSS',
+    TIE  : 'EMPATE',
 }
 
 INTERVAL_MS = {
@@ -62,6 +75,8 @@ class Pattern:
 class Signal:
     pattern         : Pattern
     entry_open_time : int
+    entry_price     : float = None   # preco no momento do alerta; None = abertura do candle de entrada
+    counted         : bool  = True   # False: alerta perdido (entrada ja fechada), fora do placar
 
     @property
     def direction(self):
@@ -70,6 +85,17 @@ class Signal:
     @property
     def label(self):
         return DIRECTIONS[self.direction]
+
+
+def signal_outcome(signal, entry_candle):
+    """WIN, LOSS ou TIE comparando o fechamento do candle de entrada com o preco de entrada."""
+    entry = entry_candle['open'] if signal.entry_price is None else signal.entry_price
+    close = entry_candle['close']
+
+    if close == entry:
+        return TIE
+
+    return WIN if (close > entry) == (signal.direction == GREEN) else LOSS
 
 
 def load_patterns(path):
@@ -109,23 +135,34 @@ class PatternDetector:
         self.max_candles       = max_candles
         self.candles     = {}      # open_time -> candle fechado
         self.pending     = []      # sinais aguardando o fechamento do candle de entrada
+        self.resolved    = {}      # entrada -> [[sinal, resultado]] ja conferidos (para revise)
         self.signaled    = set()   # (padrao, entrada) ja sinalizados, ao vivo ou no historico
 
     def reset(self):
         self.candles.clear()
         self.pending.clear()
+        self.resolved.clear()
         self.signaled.clear()
 
     def load_history(self, candles):
-        """Carrega candles fechados sem disparar sinais (sinais atrasados nao servem; ver history_signals)."""
-        for candle in candles:
+        """Carrega candles fechados sem disparar sinais (sinais atrasados nao servem; ver history_signals).
+
+        Retorna os resultados dos sinais pendentes cuja entrada veio no historico (ex.: apos uma
+        reconexao), no mesmo formato de add_closed_candle.
+        """
+        results = []
+
+        for candle in sorted(candles, key=lambda c: c['open_time']):
             if candle['is_closed']:
+                results += self._resolve_pending(candle)
                 self.candles[candle['open_time']] = candle
 
         self._trim()
 
+        return results
+
     def add_closed_candle(self, candle):
-        """Retorna (novos_sinais, resultados) onde resultados = [(sinal, cor, ganhou)]."""
+        """Retorna (novos_sinais, resultados) onde resultados = [(sinal, candle_de_entrada, WIN/LOSS/TIE)]."""
         if candle['open_time'] in self.candles:
             return [], []
 
@@ -152,6 +189,30 @@ class PatternDetector:
                 found.append((signal, self.candles.get(signal.entry_open_time)))
 
         return found
+
+    def revise(self, candle):
+        """Troca um candle ja guardado pela versao final.
+
+        Retorna (cor_antiga ou None se a cor nao mudou, [(sinal, resultado_antigo, resultado_novo)]) com
+        os resultados ja conferidos neste candle que mudaram (o resultado depende do fechamento, nao so da cor).
+        """
+        old = self.candles.get(candle['open_time'])
+        if old is None:
+            return None, []
+
+        self.candles[candle['open_time']] = candle
+        old_color = candle_color(old)
+        changed   = []
+
+        for item in self.resolved.get(candle['open_time'], []):
+            signal, before = item
+            after          = signal_outcome(signal, candle)
+
+            if after != before:
+                item[1] = after
+                changed.append((signal, before, after))
+
+        return (old_color if old_color != candle_color(candle) else None), changed
 
     def follow(self, signal):
         """Acompanha o resultado de um sinal do historico cuja entrada ainda nao fechou."""
@@ -238,8 +299,9 @@ class PatternDetector:
 
         for signal in self.pending:
             if signal.entry_open_time == candle['open_time']:
-                color = candle_color(candle)
-                results.append((signal, color, color == signal.direction))
+                outcome = signal_outcome(signal, candle)
+                results.append((signal, candle, outcome))
+                self.resolved.setdefault(candle['open_time'], []).append([signal, outcome])
 
             elif signal.entry_open_time > candle['open_time']:
                 remaining.append(signal)
@@ -251,3 +313,7 @@ class PatternDetector:
     def _trim(self):
         for open_time in sorted(self.candles)[:-self.max_candles]:
             del self.candles[open_time]
+
+        oldest = min(self.candles, default=0)
+        for open_time in [t for t in self.resolved if t < oldest]:
+            del self.resolved[open_time]
