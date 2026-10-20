@@ -181,16 +181,17 @@ class MonitorApp:
     # ------------------------------------------------------------------ UI
 
     def _build_ui(self):
+        self._build_controls()
+        self._build_info()
+        self._build_strip()
+        self._build_patterns()
+        self._build_log()
+
+    def _build_controls(self):
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill='x')
 
-        ttk.Label(top, text='Par:').pack(side='left')
-
-        self.symbol_box = ttk.Combobox(top, textvariable=self.symbol_var, width=18)
-        self.symbol_box.pack(side='left', padx=(4, 12))
-        self.symbol_box.bind('<KeyRelease>', self._filter_symbols)
-        self.symbol_box.bind('<<ComboboxSelected>>', self._on_symbol_selected)
-        self.symbol_box.bind('<Return>', self._on_symbol_selected)
+        self._build_asset_fields(top)
 
         ttk.Label(top, text='Tempo:').pack(side='left')
 
@@ -206,6 +207,17 @@ class MonitorApp:
                         command=self._on_alerts_toggled).pack(side='left', padx=12)
         ttk.Checkbutton(top, text='Som', variable=self.sound_var).pack(side='left')
 
+    def _build_asset_fields(self, top):
+        """Campos de escolha do ativo, no inicio da linha de controles."""
+        ttk.Label(top, text='Par:').pack(side='left')
+
+        self.symbol_box = ttk.Combobox(top, textvariable=self.symbol_var, width=18)
+        self.symbol_box.pack(side='left', padx=(4, 12))
+        self.symbol_box.bind('<KeyRelease>', self._filter_symbols)
+        self.symbol_box.bind('<<ComboboxSelected>>', self._on_symbol_selected)
+        self.symbol_box.bind('<Return>', self._on_symbol_selected)
+
+    def _build_info(self):
         info = ttk.Frame(self.root, padding=(10, 0))
         info.pack(fill='x')
 
@@ -215,12 +227,14 @@ class MonitorApp:
         self.countdown_label = ttk.Label(info, text='')
         self.countdown_label.pack(side='right')
 
+    def _build_strip(self):
         strip = ttk.LabelFrame(self.root, text='Ultimos candles fechados', padding=6)
         strip.pack(fill='x', padx=10, pady=8)
 
         self.strip = tk.Canvas(strip, height=58, background='#1f2630', highlightthickness=0)
         self.strip.pack(fill='x')
 
+    def _build_patterns(self):
         self.patterns_frame = ttk.LabelFrame(self.root, text='Padroes carregados', padding=6)
         self.patterns_frame.pack(fill='x', padx=10)
 
@@ -237,6 +251,7 @@ class MonitorApp:
 
         self._refresh_patterns()
 
+    def _build_log(self):
         self.stats_label = ttk.Label(self.root, padding=(10, 6))
         self.stats_label.pack(fill='x')
         self._update_stats()
@@ -358,7 +373,7 @@ class MonitorApp:
 
         self.symbols     = dict(sorted(symbols.items()))
         self.symbol_keys = {normalize_symbol(name): name for name in self.symbols}
-        self.symbol_box['values'] = list(self.symbols)[:300]
+        self._show_symbols()
 
         if first:
             self.write_log(f'{len(symbols)} {self.SYMBOLS_LABEL}')
@@ -366,8 +381,15 @@ class MonitorApp:
             self.write_log(f'Lista atualizada: {len(symbols)} {self.SYMBOLS_LABEL} '
                            f'(+{len(added)} / -{len(removed)})')
 
-        if self.stream and self.stream.name in removed:
-            self.write_log(f'{self.stream.name} deixou de estar ativo', 'error')
+        for name in self._watched_names() & removed:
+            self.write_log(f'{name} deixou de estar ativo', 'error')
+
+    def _show_symbols(self):
+        self.symbol_box['values'] = list(self.symbols)[:300]
+
+    def _watched_names(self):
+        """Ativos acompanhados pela procura em andamento."""
+        return {self.stream.name} if self.stream else set()
 
     def _resolve_symbol(self, text):
         """Nome exibido do ativo digitado, aceitando variacoes (EURUSD, eur/usd); None se nao existe."""
@@ -560,6 +582,8 @@ class MonitorApp:
         if self.sound_var.get():
             for i in range(3):
                 self.root.after(i * 300, self.root.bell)
+
+        return alert
 
     def _tick(self):
         if self.close_time:

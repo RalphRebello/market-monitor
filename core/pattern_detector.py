@@ -153,6 +153,11 @@ class PatternDetector:
 
         return found
 
+    def follow(self, signal):
+        """Acompanha o resultado de um sinal do historico cuja entrada ainda nao fechou."""
+        if signal not in self.pending:
+            self.pending.append(signal)
+
     def last_colors(self, count, last_open_time=None):
         """Cores dos candles fechados consecutivos ate last_open_time (padrao: o mais recente)."""
         if not self.candles:

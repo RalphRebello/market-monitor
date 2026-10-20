@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import queue
 import threading
+from itertools import count
 from time import sleep, time
 
 from iqoptionapi.stable_api import IQ_Option
@@ -41,10 +43,17 @@ HISTORY_LIMIT    = 30
 REQUEST_TIMEOUT  = 15     # segundos para respostas do websocket da IQ Option
 CONNECT_TIMEOUT  = 40
 CLOSE_FETCH_WAIT = 0.3    # espera apos o fechamento antes de buscar o candle fechado
+MAX_ASSETS       = 20     # ativos acompanhados ao mesmo tempo
+REQUEST_PREFIX   = 'monitor-'    # request_id dos pedidos de candles deste monitor
+MAX_RETRY_WAIT   = 30     # espera maxima (s) para tentar de novo um ativo sem candle novo
 
 
 class IQOptionError(Exception):
     pass
+
+
+class NoReplyError(IQOptionError):
+    """A IQ Option nao respondeu: em geral, conexao caida (mesmo que o websocket pareca aberto)."""
 
 
 def iq_candle_to_candle(c, server_now):
@@ -168,8 +177,13 @@ class IQSession:
     """Conexao unica com a IQ Option (a biblioteca usa estado global, entao so pode haver uma)."""
 
     def __init__(self):
-        self.api  = None
-        self.lock = threading.Lock()
+        self.api         = None
+        self.lock        = threading.Lock()
+        self.replies     = {}                       # request_id -> resposta (None enquanto espera)
+        self.replied     = threading.Condition()
+        self.request_ids = count(1)
+        self.pipeline    = True    # False se o servidor nao devolver o request_id nas respostas
+        self.unmatched   = 0       # respostas de candles sem um request_id deste monitor
 
     @property
     def connected(self):
@@ -207,7 +221,10 @@ class IQSession:
         Ate a primeira sincronizacao a biblioteca devolve time()/1000 (uma data de 1970);
         nesse caso, e em qualquer valor muito distante do relogio local, usa o relogio local.
         """
-        server = self.api.get_server_timestamp()
+        try:
+            server = self.api.get_server_timestamp()
+        except Exception as error:
+            raise IQOptionError(f'Falha ao ler a hora do servidor: {error}') from error
 
         if abs(server - time()) > 3600:
             return time()
@@ -287,34 +304,194 @@ class IQSession:
             candles_api = self.api.api.candles
             candles_api.candles_data = None
 
-            self.api.api.getcandles(active_id, size, count, end_time)
+            try:
+                self.api.api.getcandles(active_id, size, count, end_time)
+            except Exception as error:
+                raise NoReplyError(f'Falha ao pedir candles: {error}') from error
 
             start = time()
             while candles_api.candles_data is None:
                 if time() - start > REQUEST_TIMEOUT or not self.connected:
-                    raise IQOptionError('Sem resposta ao buscar candles')
+                    raise NoReplyError('Sem resposta ao buscar candles')
                 sleep(0.05)
 
             return candles_api.candles_data
 
+    def get_candles_many(self, requests):
+        """Candles de varios ativos de uma vez: requests = [(active_id, size, count, end_time)].
 
-class IQCandleStream(threading.Thread):
-    """Acompanha os candles de um ativo e envia eventos no mesmo formato do KlineStream da Binance."""
+        Os pedidos vao todos juntos e cada resposta e reconhecida pelo request_id, entao 20 ativos
+        levam praticamente o tempo de um. Devolve, na mesma ordem, a lista de candles ou um
+        IQOptionError para cada pedido.
+        """
+        if not self.pipeline:
+            return [self._try_get_candles(*request) for request in requests]
 
-    def __init__(self, stream_id, session, name, active_id, interval, events):
+        with self.lock:
+            if not self.connected:
+                raise NoReplyError('Sem conexao com a IQ Option')
+
+            try:
+                self._hook_replies()
+            except AttributeError as error:    # websocket ainda nao criado ou ja descartado
+                raise NoReplyError(f'Websocket indisponivel: {error}') from error
+
+            ids = [f'{REQUEST_PREFIX}{next(self.request_ids)}' for _ in requests]
+
+            with self.replied:
+                self.replies.update(dict.fromkeys(ids))
+                self.unmatched = 0
+
+            try:
+                try:
+                    for request_id, (active_id, size, count, end_time) in zip(ids, requests):
+                        body = {'active_id': int(active_id), 'size': size, 'to': int(end_time), 'count': count}
+                        self.api.api.send_websocket_request('sendMessage',
+                                                            {'name': 'get-candles', 'version': '2.0',
+                                                             'body': body},
+                                                            request_id=request_id)
+                except Exception as error:    # ex.: websocket fechado no meio do envio
+                    raise NoReplyError(f'Falha ao pedir candles: {error}') from error
+
+                deadline = time() + REQUEST_TIMEOUT
+
+                with self.replied:
+                    while any(self.replies[request_id] is None for request_id in ids):
+                        left = deadline - time()
+                        if left <= 0 or not self.connected:
+                            break
+                        self.replied.wait(min(left, 0.5))
+
+                    answers   = [self.replies[request_id] for request_id in ids]
+                    unmatched = self.unmatched
+
+            finally:
+                with self.replied:
+                    for request_id in ids:
+                        self.replies.pop(request_id, None)
+
+        if all(answer is None for answer in answers):
+            # Chegaram candles, mas sem o request_id: o servidor nao o devolve, entao passa a
+            # pedir um ativo por vez. Sem resposta nenhuma, a conexao caiu.
+            if unmatched and self.connected:
+                self.pipeline = False
+                return self.get_candles_many(requests)
+
+            raise NoReplyError('Sem resposta da IQ Option ao buscar candles')
+
+        return [candles_from_reply(answer) for answer in answers]
+
+    def _try_get_candles(self, *request):
+        try:
+            return self.get_candles(*request)
+        except IQOptionError as error:
+            return error
+
+    def _hook_replies(self):
+        """Intercepta as respostas do websocket com um request_id deste monitor.
+
+        A biblioteca guarda so a ultima resposta de candles (candles_data), o que obriga a pedir um
+        ativo por vez. A cada login ela cria um websocket novo, entao o gancho e refeito quando falta.
+        """
+        wss = self.api.api.websocket_client.wss
+
+        if getattr(wss, 'monitor_hooked', False):
+            return
+
+        original = wss.on_message
+
+        def on_message(app, message):
+            try:
+                if isinstance(message, str) and '"candles"' in message:
+                    reply = json.loads(message)
+
+                    with self.replied:
+                        if reply.get('request_id') in self.replies:
+                            self.replies[reply['request_id']] = reply
+                            self.replied.notify_all()
+                        elif (reply.get('name') == 'candles'
+                              and not str(reply.get('request_id', '')).startswith(REQUEST_PREFIX)):
+                            self.unmatched += 1    # respostas atrasadas de lotes anteriores nao contam
+            except (ValueError, AttributeError):
+                pass
+
+            original(message)
+
+        wss.on_message     = on_message
+        wss.monitor_hooked = True
+
+
+def candles_from_reply(reply):
+    if reply is None:
+        return NoReplyError('Sem resposta ao buscar candles')
+
+    msg = reply.get('msg')
+    if isinstance(msg, dict) and isinstance(msg.get('candles'), list):
+        return msg['candles']
+
+    return IQOptionError(f'Resposta inesperada ao buscar candles: {str(msg)[:120]}')
+
+
+class IQMultiStream(threading.Thread):
+    """Acompanha os candles de varios ativos (ate MAX_ASSETS) numa unica thread.
+
+    Envia para a fila da GUI eventos (stream_id, tipo, dados):
+      history  {'name', 'candles', 'time_offset'}  candles recentes do ativo (sem alerta)
+      kline    {'name', 'candle'}                  candle recem-fechado
+      open     {'close_time'}                      abertura de um candle (contagem regressiva)
+      asset    {'name', 'text', 'error'}           situacao de um ativo
+      status   texto                               situacao geral
+    """
+
+    def __init__(self, stream_id, session, assets, interval, events):
         super().__init__(daemon=True)
         self.stream_id   = stream_id
         self.session     = session
-        self.name        = name    # nome exibido (EUR/USD)
-        self.active_id   = active_id
+        self.assets      = dict(assets)    # nome exibido (EUR/USD) -> active_id
+        self.commands    = queue.Queue()   # ('add', nome, active_id) / ('remove', nome, None)
         self.interval    = interval
         self.size        = INTERVAL_SECONDS[interval]
+        self.size_ms     = self.size * 1000
         self.events      = events
         self._stop_event = threading.Event()
         self.offset      = 0.0    # time() - hora do servidor, em segundos
 
+        self.last_closed = dict.fromkeys(self.assets)       # None: falta carregar o historico
+        self.retry_at    = dict.fromkeys(self.assets, 0)    # ms do servidor
+        self.misses      = dict.fromkeys(self.assets, 0)
+        self.asset_text  = dict.fromkeys(self.assets)
+
+    @property
+    def name(self):
+        return next(iter(self.assets)) if len(self.assets) == 1 else f'{len(self.assets)} ativos'
+
     def stop(self):
         self._stop_event.set()
+
+    def add_asset(self, name, active_id):
+        """Passa a acompanhar mais um ativo sem reiniciar os outros (chamado pela GUI)."""
+        self.commands.put(('add', name, active_id))
+
+    def remove_asset(self, name):
+        self.commands.put(('remove', name, None))
+
+    def _apply_commands(self):
+        """Aplica as mudancas de ativos pedidas pela GUI, sempre entre um lote e outro."""
+        while True:
+            try:
+                command, name, active_id = self.commands.get_nowait()
+            except queue.Empty:
+                return
+
+            if command == 'add':
+                self.assets[name]      = active_id
+                self.last_closed[name] = None    # o historico do ativo novo vem no proximo lote
+                self.retry_at[name]    = 0
+                self.misses[name]      = 0
+                self.asset_text[name]  = None
+            else:
+                for table in (self.assets, self.last_closed, self.retry_at, self.misses, self.asset_text):
+                    table.pop(name, None)
 
     def emit(self, kind, payload=None):
         self.events.put((self.stream_id, kind, payload))
@@ -322,73 +499,119 @@ class IQCandleStream(threading.Thread):
     def server_now(self):
         return time() - self.offset
 
-    def fetch(self, count):
-        self.offset = time() - self.session.server_time()
-        now         = self.server_now()
-        raw         = self.session.get_candles(self.active_id, self.size, count, now)
-
-        return [iq_candle_to_candle(c, now) for c in raw]
-
     def run(self):
-        backoff = 1
+        backoff      = 1
+        online       = False
+        current_open = None
+        reconnect    = False    # apos uma falha, reconecta mesmo que o websocket pareca aberto
 
         while not self._stop_event.is_set():
             try:
-                if not self.session.connected:
+                if reconnect or not self.session.connected:
                     self.emit('status', 'Reconectando na IQ Option...')
                     self.session.reconnect()
+                    reconnect = False
 
-                candles = self.fetch(HISTORY_LIMIT)
-                self.emit('history', {'candles': candles, 'time_offset': self.offset * 1000})
-                self.emit('status', f'Conectado em {self.name} ({self.interval})')
-                backoff = 1
+                self._apply_commands()
+                open_time = int(self.server_now() * 1000 // self.size_ms) * self.size_ms
 
-                closed = [c['open_time'] for c in candles if c['is_closed']]
-                if not closed:
-                    raise IQOptionError('Nenhum candle recebido')
+                if open_time != current_open:
+                    current_open = open_time
+                    self.emit('open', {'close_time': open_time + self.size_ms - 1})
 
-                last_closed = max(closed)
-                if last_closed < (self.server_now() - 3 * self.size) * 1000:
-                    self.emit('status', f'{self.name} sem cotacao recente (ativo fechado?)')
+                due = self._due(open_time)
+                if due:
+                    self._fetch(due, open_time)
 
-                self._follow(last_closed)
+                if not online:
+                    online, backoff = True, 1
+                    self.emit('status', f'Conectado em {self.name} ({self.interval})')
 
-            except IQOptionError as error:
+            # Qualquer erro (inclusive excecoes inesperadas da biblioteca com a conexao caida) leva a
+            # uma nova conexao; a thread nunca termina sozinha enquanto a procura estiver ligada.
+            except Exception as error:
                 if self._stop_event.is_set():
                     break
 
+                online, reconnect = False, True
                 self.emit('status', f'Conexao perdida ({error}). Reconectando em {backoff}s...')
                 self._stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)
+                continue
+
+            self._stop_event.wait(0.2)
 
         self.emit('status', 'Procura parada')
 
-    def _follow(self, last_closed):
-        """Avisa o candle em andamento e busca cada candle assim que ele fecha."""
-        size_ms        = self.size * 1000
-        current_open   = None
+    def _due(self, open_time):
+        """Ativos que precisam de candles: sem historico ou com um candle fechado ainda nao recebido."""
+        now_ms = self.server_now() * 1000
+        closed = now_ms - open_time >= CLOSE_FETCH_WAIT * 1000
 
-        while not self._stop_event.is_set():
-            now_ms    = self.server_now() * 1000
-            open_time = int(now_ms // size_ms) * size_ms
+        return [name for name, last in self.last_closed.items()
+                if now_ms >= self.retry_at[name]
+                and (last is None or (closed and open_time - self.size_ms > last))]
 
-            if open_time != current_open:
-                current_open = open_time
-                self.emit('kline', {'open_time'  : open_time,
-                                    'close_time' : open_time + size_ms - 1,
-                                    'is_closed'  : False})
+    def _fetch(self, due, open_time):
+        """Busca os candles dos ativos pendentes num unico lote de pedidos."""
+        self.offset = time() - self.session.server_time()
+        now         = self.server_now()
+        modes       = []
+        requests    = []
 
-            if open_time - size_ms > last_closed:
-                self._stop_event.wait(CLOSE_FETCH_WAIT)
-                previous = last_closed
+        for name in due:
+            last    = self.last_closed[name]
+            missing = None if last is None else (open_time - last) // self.size_ms - 1
 
-                for candle in self.fetch(3):
-                    if candle['is_closed'] and candle['open_time'] > last_closed:
-                        self.emit('kline', candle)
-                        last_closed = candle['open_time']
+            # Sem historico ou com muitos candles perdidos (reconexao): recarrega sem alertas.
+            history = missing is None or missing > 3
+            modes.append(history)
+            requests.append((self.assets[name], self.size,
+                             HISTORY_LIMIT if history else missing + 2, now))
 
-                # Sem candle novo (ativo fechado ou atraso do servidor): espera mais antes de tentar.
-                if last_closed == previous:
-                    self._stop_event.wait(2)
+        results = self.session.get_candles_many(requests)
 
-            self._stop_event.wait(0.2)
+        # Nenhum ativo respondeu: e a conexao, nao os ativos.
+        if all(isinstance(r, NoReplyError) for r in results):
+            raise results[0]
+
+        for name, history, result in zip(due, modes, results):
+            if isinstance(result, IQOptionError):
+                self._set_asset(name, str(result), error=True)
+                self._retry_later(name)
+                continue
+
+            candles = [iq_candle_to_candle(c, now) for c in result]
+            last    = self.last_closed[name]
+            closed  = sorted((c for c in candles if c['is_closed'] and (last is None or c['open_time'] > last)),
+                             key=lambda c: c['open_time'])
+
+            if history:
+                self.emit('history', {'name': name, 'candles': candles, 'time_offset': self.offset * 1000})
+            else:
+                for candle in closed:
+                    self.emit('kline', {'name': name, 'candle': candle})
+
+            if closed:
+                self.last_closed[name] = closed[-1]['open_time']
+                self.misses[name]      = 0
+                self.retry_at[name]    = 0
+            else:
+                # Ativo fechado ou atraso do servidor: espera cada vez mais antes de tentar de novo.
+                self._retry_later(name)
+
+            last = self.last_closed[name]
+            if last is None or last < (now - 3 * self.size) * 1000:
+                self._set_asset(name, 'sem cotacao recente (ativo fechado?)', error=True)
+            else:
+                self._set_asset(name, 'ao vivo')
+
+    def _retry_later(self, name):
+        self.misses[name]  += 1
+        wait                = min(2 * self.misses[name], MAX_RETRY_WAIT)
+        self.retry_at[name] = (self.server_now() + wait) * 1000
+
+    def _set_asset(self, name, text, error=False):
+        if self.asset_text[name] != text:
+            self.asset_text[name] = text
+            self.emit('asset', {'name': name, 'text': text, 'error': error})
