@@ -7,13 +7,18 @@ from tkinter import ttk, messagebox
 
 from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, IQCandleStream, IQOptionError,
                                       IQSession, display_name)
-from binance.monitor_patterns import PATTERNS_FILE, MonitorApp
-from core.pattern_detector import PatternDetector, PatternError
+from binance.monitor_patterns import COLORS, PATTERNS_FILE, MonitorApp
+from core.pattern_detector import DIRECTIONS, PatternDetector, PatternError, ms_to_datetime
 
 
 DEFAULT_ASSET      = 'EUR/USD'
 DEFAULT_ASSET_TYPE = 'Opcoes binarias'
 ASSETS_REFRESH_MS  = 5 * 60 * 1000
+
+# Termometro: cor da barra conforme a fracao do gatilho ja formada (frio -> quente).
+HEAT_COLORS = ((0.5, '#3498db'), (0.75, '#f1c40f'), (1.0, '#e67e22'))
+HEAT_DONE   = '#f1c40f'
+THERMO_ROW  = 26
 
 
 class IQMonitorApp(MonitorApp):
@@ -30,7 +35,7 @@ class IQMonitorApp(MonitorApp):
         super().__init__(root)
 
         self.root.title('Monitor de Padroes - IQ Option')
-        self.root.geometry('1000x640')
+        self.root.geometry('1000x780')
         self.symbol_var.set(DEFAULT_ASSET)
 
         self.interval_box['values'] = list(INTERVAL_SECONDS)
@@ -60,6 +65,14 @@ class IQMonitorApp(MonitorApp):
         self.type_box.pack(side='left', padx=(4, 12), before=first)
         self.type_box.bind('<<ComboboxSelected>>', self._on_type_selected)
 
+        thermo = ttk.LabelFrame(self.root, text='Termometro dos padroes', padding=6)
+        thermo.pack(fill='x', padx=10, pady=(0, 8), before=self.patterns_frame)
+
+        self.thermo = tk.Canvas(thermo, height=len(self.patterns) * THERMO_ROW + 4,
+                                background='#1f2630', highlightthickness=0)
+        self.thermo.pack(fill='x')
+        self._draw_thermometer()
+
         login = ttk.Frame(self.root, padding=(10, 10, 10, 0))
         login.pack(fill='x', before=self.root.pack_slaves()[0])
 
@@ -76,6 +89,66 @@ class IQMonitorApp(MonitorApp):
 
         self.login_label = ttk.Label(login, text='Desconectado')
         self.login_label.pack(side='left', padx=12)
+
+    def _draw_strip(self):
+        super()._draw_strip()
+        self._draw_thermometer()
+
+    def _draw_thermometer(self):
+        """Uma linha por padrao: candles do gatilho ja formados, barra de progresso e o que falta."""
+        self.thermo.delete('all')
+
+        for row, (pattern, formed, entry) in enumerate(self.detector.pattern_progress()):
+            size     = len(pattern.trigger)
+            fraction = formed / size
+            y        = 4 + row * THERMO_ROW
+            mid      = y + 9
+            done     = formed == size
+
+            self.thermo.create_text(8, mid, anchor='w', text=pattern.name,
+                                    fill='#e8e8e8', font=('TkDefaultFont', 9, 'bold'))
+
+            # Candles do gatilho: preenchidos os ja formados; o proximo esperado com contorno tracejado.
+            for i, color in enumerate(pattern.trigger):
+                x = 170 + i * 20
+                if i < formed:
+                    self.thermo.create_rectangle(x, y + 2, x + 14, y + 16, fill=COLORS[color], outline='')
+                elif i == formed:
+                    self.thermo.create_rectangle(x, y + 2, x + 14, y + 16, outline=COLORS[color],
+                                                 dash=(3, 2), width=2)
+                else:
+                    self.thermo.create_rectangle(x, y + 2, x + 14, y + 16, outline='#4a5568')
+
+            # Termometro: bulbo + tubo, enchendo com cor mais quente conforme o padrao avanca.
+            heat = HEAT_DONE if done else next(c for limit, c in HEAT_COLORS if fraction <= limit)
+            x0, x1 = 352, 552
+            fill = heat if formed else '#4a5568'
+
+            self.thermo.create_rectangle(x0 + 6, y + 4, x1, y + 14, fill='#2c3746', outline='#4a5568')
+            if formed:
+                self.thermo.create_rectangle(x0 + 6, y + 4, x0 + 6 + (x1 - x0 - 6) * fraction, y + 14,
+                                             fill=heat, outline='')
+            self.thermo.create_oval(x0 - 4, y, x0 + 14, y + 18, fill=fill, outline='#4a5568')
+
+            self.thermo.create_text(x1 + 8, mid, anchor='w', text=f'{fraction:4.0%}',
+                                    fill=heat if formed else '#8a8f98', font=('TkDefaultFont', 9, 'bold'))
+
+            if done:
+                status = (f'FORMADO: {DIRECTIONS[pattern.direction]} na entrada '
+                          f'{ms_to_datetime(entry).strftime("%H:%M")}')
+                color  = COLORS[pattern.direction]
+            elif formed:
+                missing = size - formed
+                status  = (f'{formed}/{size}  ' + ('falta 1 candle' if missing == 1 else f'faltam {missing} candles') +
+                           f' | '
+                           f'entrada prevista {ms_to_datetime(entry).strftime("%H:%M")}')
+                color   = '#e8e8e8'
+            else:
+                status = f'0/{size}  aguardando o 1o candle ({pattern.trigger[0]})'
+                color  = '#8a8f98'
+
+            self.thermo.create_text(x1 + 50, mid, anchor='w', text=status, fill=color,
+                                    font=('TkDefaultFont', 9, 'bold' if done else 'normal'))
 
     # ---------------------------------------------------------------- login
 

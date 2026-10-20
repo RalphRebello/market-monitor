@@ -56,6 +56,24 @@ IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.m
 5. Clique em **Iniciar procura**. Os demais controles (alertas, som, placar, histórico) funcionam como no
    [monitor da Binance](../binance/README.md#como-usar).
 
+### Termômetro dos padrões
+
+Abaixo da faixa de candles, uma linha por padrão mostra o quanto do gatilho (os 8 candles antes da
+entrada) já se formou nos últimos candles fechados:
+
+- os quadrados do gatilho ficam preenchidos com a cor de cada candle já formado; o próximo candle esperado
+  aparece com contorno tracejado na cor que precisa ter;
+- a barra do termômetro enche e esquenta conforme o padrão avança (azul até 50%, amarelo até 75%, laranja
+  depois) e mostra a porcentagem;
+- o texto diz quantos candles faltam e o horário previsto da entrada; com 8/8 aparece
+  `FORMADO: COMPRA (CALL)` / `VENDA (PUT)` com o horário da entrada (o próximo candle).
+
+Conta o maior trecho final dos candles fechados que repete o início do gatilho
+(`PatternDetector.pattern_progress`). Se um candle sai diferente do esperado, o termômetro cai para o
+trecho que ainda serve (às vezes 0). Com **Exigir horario de entrada** marcada, só conta se a entrada
+prevista cair num minuto aceito (2/7); senão o padrão fica em 0%. O termômetro usa só candles fechados (a
+IQ Option não envia o preço do candle em andamento).
+
 ## Arquitetura
 
 ```
@@ -151,6 +169,7 @@ flowchart LR
 | `_build_ui` | acrescenta a linha de login acima dos controles |
 | `_load_symbols` | não carrega nada na abertura; os ativos vêm depois do login |
 | `_build_ui` (tipo) | acrescenta o campo **Tipo** antes do **Par** |
+| `_build_ui` / `_draw_strip` | acrescenta o termômetro dos padrões e o redesenha junto com a faixa de candles |
 | `login` / `_process_iq_events` | login e lista de ativos numa thread, com uma fila própria; descarta listas de um tipo que já não está selecionado |
 | `_on_type_selected` | troca de tipo: para a procura e recarrega a lista |
 | `SYMBOLS_LABEL` | vira uma property, para o histórico mostrar o tipo (`ativos abertos (Forex)`) |

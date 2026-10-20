@@ -178,6 +178,36 @@ class PatternDetector:
                 if (not self.use_entry_minutes or pattern.matches_time(entry_open_time))
                 and self.last_colors(len(pattern.trigger)) == pattern.trigger]
 
+    def pattern_progress(self):
+        """Quanto de cada gatilho ja se formou: [(padrao, candles_formados, entrada_prevista)].
+
+        candles_formados e o maior k em que os ultimos k candles fechados repetem os k primeiros do
+        gatilho; se ele continuar formando, a entrada sera em entrada_prevista (open_time). Com a regra
+        de horario ligada, so conta o k cuja entrada prevista cai num minuto aceito pelo padrao.
+        """
+        if not self.candles:
+            return [(pattern, 0, None) for pattern in self.patterns]
+
+        last     = max(self.candles)
+        progress = []
+
+        for pattern in self.patterns:
+            size = len(pattern.trigger)
+
+            for formed in range(size, -1, -1):
+                entry_open_time = last + (size - formed + 1) * self.interval_ms
+
+                if formed and self.last_colors(formed) != pattern.trigger[:formed]:
+                    continue
+
+                if formed and self.use_entry_minutes and not pattern.matches_time(entry_open_time):
+                    continue
+
+                progress.append((pattern, formed, entry_open_time if formed else None))
+                break
+
+        return progress
+
     def _find_signals(self, entry_open_time):
         signals = []
 
