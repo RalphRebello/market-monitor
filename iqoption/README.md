@@ -243,8 +243,11 @@ flowchart LR
   o nome do ativo:
   1. no início, busca os últimos 30 candles de todos os ativos num único lote e envia cada um como histórico;
   2. pelo relógio do servidor, avisa a abertura de cada candle (para a contagem regressiva, comum a todos);
-  3. 0,3 s depois de cada fechamento, busca num único lote os candles recém-fechados dos ativos que ainda
-     não os receberam;
+  3. 1 s depois de cada fechamento, busca num único lote os candles recém-fechados dos ativos que ainda
+     não os receberam (o lote volta em ~0,4 s). Antes eram 0,3 s, mas o fechamento ainda não é final tão
+     cedo: medido em 40 ativos (160 candles), lido 0,5 s depois ~9% ainda mudavam de preço por ticks
+     atrasados; a partir de 1 s, nenhum. Em lentidões eventuais da IQ Option ele ainda pode mudar, e a
+     conferência no lote seguinte corrige (veja [Placar e resultado](#placar-e-resultado));
   4. um ativo sem candle novo é tentado de novo a cada 0,5 s nas 6 primeiras vezes (atraso do servidor) e
      depois com espera crescente (2 s, 4 s ... até 30 s; mercado fechado), sem atrasar os outros; se
      faltarem mais de 3 candles (ex.: após uma reconexão), o histórico do ativo é recarregado sem alertas;
@@ -326,7 +329,7 @@ por acaso. Confirme rodando de novo com outro período antes de confiar.
 | Autenticação | nenhuma | e-mail e senha da conta |
 | Ativos | pares SPOT (`BTC/USDT`) | binárias, blitz, digitais, forex, cripto e CFD, escolhidos no campo **Tipo** (`EUR/USD`, `EUR/USD (OTC)`) |
 | Tempos | 1m, 3m, 5m, 15m, 30m, 1h | 1m, 5m, 15m, 30m, 1h |
-| Candle fechado | enviado pelo WebSocket (`x = true`) | buscado ~0,3 s depois do fechamento |
+| Candle fechado | enviado pelo WebSocket (`x = true`) | buscado 1 s depois do fechamento (alerta em ~1,5 s) |
 | Biblioteca | oficial/pública (REST + WebSocket) | não oficial, sem manutenção |
 
 ## Solução de problemas

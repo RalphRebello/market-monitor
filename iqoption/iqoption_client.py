@@ -43,7 +43,9 @@ UNDERLYING_REQUESTS = {
 HISTORY_LIMIT    = 30
 REQUEST_TIMEOUT  = 15     # segundos para respostas do websocket da IQ Option
 CONNECT_TIMEOUT  = 40
-CLOSE_FETCH_WAIT = 0.3    # espera apos o fechamento antes de buscar o candle fechado
+# Espera apos o fechamento antes de buscar o candle fechado. Medido: lido 0,5 s depois, ~9% dos candles ainda
+# mudavam de preco (ticks atrasados); a partir de 1 s, nenhum (fora de lentidoes eventuais da IQ Option).
+CLOSE_FETCH_WAIT = 1.0
 MAX_ASSETS       = 20     # ativos acompanhados ao mesmo tempo
 REQUEST_PREFIX   = 'monitor-'    # request_id dos pedidos de candles deste monitor
 MAX_RETRY_WAIT   = 30     # espera maxima (s) para tentar de novo um ativo sem candle novo
