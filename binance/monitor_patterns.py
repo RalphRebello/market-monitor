@@ -272,10 +272,10 @@ class MonitorApp:
         self.stats_label.pack(fill='x')
         self._update_stats()
 
-        self.log = ScrolledText(self.root, height=14, state='disabled', font=('monospace', 10))
+        self.log = ScrolledText(self.root, height=14, state='disabled', font=('Courier', 10))
         self.log.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-        self.log.tag_configure('buy', foreground=COLORS[GREEN], font=('monospace', 10, 'bold'))
-        self.log.tag_configure('sell', foreground=COLORS[RED], font=('monospace', 10, 'bold'))
+        self.log.tag_configure('buy', foreground=COLORS[GREEN], font=('Courier', 10, 'bold'))
+        self.log.tag_configure('sell', foreground=COLORS[RED], font=('Courier', 10, 'bold'))
         self.log.tag_configure('error', foreground='#d35400')
 
     def write_log(self, text, tag=None):

@@ -147,6 +147,24 @@ trecho que ainda serve (às vezes 0). Com **Exigir horario de entrada** marcada,
 prevista cair num minuto aceito (2/7); senão o padrão fica em 0%. O termômetro usa só candles fechados (a
 IQ Option não envia o preço do candle em andamento).
 
+## Executável para Windows
+
+Para usar no Windows sem instalar Python, gere o `.exe` a partir do Linux (precisa de Docker):
+
+```bash
+./windows/build.sh
+```
+
+O script roda o Python do Windows dentro do Wine (imagem `tobix/pywine:3.12`), instala as dependências de
+`windows/requirements-windows.txt` e empacota tudo com o PyInstaller em **um único arquivo**:
+`dist/MonitorIQOption.exe` (~11 MB). Basta copiar esse arquivo para o Windows e dar dois cliques.
+
+- O `patterns/patterns.json` vai embutido no executável; para mudar os padrões, edite o arquivo e gere o
+  `.exe` de novo.
+- As escolhas ficam em `%USERPROFILE%\.config\monitor_padroes\iqoption.json`.
+- Como o executável não é assinado, o Windows SmartScreen pode avisar na primeira execução
+  (**Mais informações → Executar assim mesmo**).
+
 ## Arquitetura
 
 ```
