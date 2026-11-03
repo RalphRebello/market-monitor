@@ -1,10 +1,7 @@
-# Monitor de padrões: variação IQ Option
+# Monitor de padrões: IQ Option
 
-Variação do [monitor da Binance](../binance/README.md) que procura os mesmos padrões de `patterns/patterns.json` nos
-ativos de opções binárias da **IQ Option** e gera alertas de **COMPRA (CALL)** ou **VENDA (PUT)**.
-
-A janela, os padrões, os alertas e as regras de detecção são os mesmos do monitor da Binance. As diferenças
-são o login, a lista de ativos e a origem dos candles.
+Monitor com interface gráfica que procura, em tempo real, as sequências de candles definidas em
+`patterns/patterns.json` nos ativos da **IQ Option** e gera alertas de **COMPRA (CALL)** ou **VENDA (PUT)**.
 
 > **Atenção**
 > - A IQ Option **não tem API pública**. Este monitor usa a biblioteca não oficial
@@ -18,11 +15,13 @@ são o login, a lista de ativos e a origem dos candles.
 ## Instalação
 
 ```bash
+sudo apt install python3-tk                       # Linux, se o Tkinter não estiver instalado
+python3 -m venv .venv
 .venv/bin/pip install -r iqoption/requirements.txt
 ```
 
-Isso instala as dependências do monitor da Binance mais a `iqoptionapi`, fixada num commit específico do
-GitHub, e a `websocket-client 0.56` que ela exige.
+Isso instala a `iqoptionapi`, fixada num commit específico do GitHub, e a `websocket-client 0.56` que ela
+exige.
 
 ## Como usar
 
@@ -43,9 +42,9 @@ IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.m
 1. Preencha **E-mail** e **Senha** e clique em **Entrar** (ou pressione Enter no campo da senha).
 2. Escolha o **Tipo** de ativo, como nas categorias da IQ Option: **Opcoes binarias** (padrão), **Blitz**,
    **Opcoes digitais**, **Forex**, **Criptomoedas** ou **CFD / Acoes** (ações, índices e commodities).
-   Trocar o tipo encerra a procura em andamento e recarrega a lista. Se o ativo do campo **Par** não
-   existir no novo tipo, o campo passa para o primeiro ativo da lista.
-3. Depois do login, o histórico mostra `N ativos abertos (<tipo>)`, e a lista **Par** passa a mostrar
+   Trocar o tipo encerra a procura em andamento e recarrega a lista. Se o ativo de um cartão não
+   existir no novo tipo, o cartão passa para um ativo aberto ainda não usado.
+3. Depois do login, o histórico mostra `N ativos abertos (<tipo>)`, e a lista de ativos dos cartões passa a mostrar
    **somente** os ativos abertos do tipo escolhido, com o nome como aparece na IQ Option (ex.: `EUR/USD`,
    `EUR/USD (OTC)`). A busca aceita variações: `EUR/USD`, `eurusd`, `EURUSD-OTC` e `eur/usd (otc)` encontram
    o ativo certo. Ativos fechados não aparecem e, se digitados, são recusados. A lista é atualizada a cada
@@ -66,8 +65,17 @@ IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.m
 7. Um padrão que já estava formado quando o ativo entrou na procura (ao iniciar, ao trocar o ativo ou
    ao recarregar o histórico depois de uma reconexão) **gera alerta se o candle de entrada ainda estiver
    aberto**. Se a entrada já fechou, ele só aparece no histórico como `Historico (sem alerta)`, com o
-   resultado. Os demais controles (alertas, som, placar, histórico) funcionam como no
-   [monitor da Binance](../binance/README.md#como-usar).
+   resultado.
+
+Os demais controles:
+
+| Controle | O que faz |
+|---|---|
+| **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde (COMPRA) ou vermelho (VENDA), que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
+| **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
+| **Exigir horario de entrada** | Caixa no quadro de padrões. Desligada (padrão): os padrões valem em qualquer horário. Ligada: exige a [regra 2/7](#restrição-de-horário-27--opcional-desligada-por-padrão). Pode ser trocada com a procura em andamento. |
+| **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da IQ Option. |
+| **Histórico** | Todos os eventos com horário: conexão, sinais, resultados e erros. |
 
 ### Alertas no tempo certo
 
@@ -119,7 +127,7 @@ Cada ativo acompanhado tem um cartão com:
 
 - o campo do ativo, a situação (`ao vivo`, `sem cotacao recente (ativo fechado?)` ou o erro) e o placar
   do ativo (`Sinais  W  L  E` e o acerto, somado durante a sessão, mesmo que a procura seja reiniciada);
-- a faixa dos últimos candles fechados, numerada como no monitor da Binance (gatilho 1..8 e entrada 9);
+- a faixa dos últimos candles fechados, numerada como o gatilho (1..8) e a entrada (9);
 - o termômetro dos padrões (abaixo).
 
 O cartão ganha borda amarela quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
@@ -147,6 +155,102 @@ trecho que ainda serve (às vezes 0). Com **Exigir horario de entrada** marcada,
 prevista cair num minuto aceito (2/7); senão o padrão fica em 0%. O termômetro usa só candles fechados (a
 IQ Option não envia o preço do candle em andamento).
 
+## Padrões
+
+Os padrões vêm das imagens em `patterns/` e estão descritos em `patterns/patterns.json`. Cada padrão tem 9
+candles: os **8 primeiros são o gatilho** e o **9º é a entrada**, e a cor dele define a direção.
+
+| Padrão | Imagem | Gatilho (candles 1 a 8) | Entrada (candle 9) |
+|---|---|---|---|
+| 1 | `WhatsApp Image ... 9.57.39 AM.jpeg` | R G G R R R G R | G → COMPRA (CALL) |
+| 2 | `WhatsApp Image ... 9.57.39 AM (1).jpeg` | G R R G G G R G | R → VENDA (PUT) |
+| 3 | `WhatsApp Image ... 9.57.40 AM.jpeg` | G R R G R R G R | G → COMPRA (CALL) |
+| 4 | `WhatsApp Image ... 9.57.40 AM (1).jpeg` | R G G R G G R G | R → VENDA (PUT) |
+
+`G` = candle verde (fechamento > abertura), `R` = candle vermelho (fechamento < abertura).
+
+### Restrição de horário (2/7) — opcional, desligada por padrão
+
+> Por padrão os padrões são procurados **só pelas cores, em qualquer horário**. A regra de horário é ligada
+> pela caixa **Exigir horario de entrada**, no quadro de padrões, e pode ser ligada/desligada com a procura
+> em andamento. A escolha fica salva entre uma execução e outra; o valor inicial é `DEFAULT_ENTRY_MINUTES`,
+> em `iqoption/monitor_base.py`.
+
+Nas imagens, o candle 4 está marcado com **2/7** e o candle 9 com **7/2**. Com a regra ligada, o monitor
+interpreta isso como horário no gráfico de 1 minuto: o candle 4 abre num minuto terminado em 2 ou 7 e,
+cinco candles depois, a entrada abre no outro (7 ou 2).
+
+```
+candle:   1     2     3     4     5     6     7     8     9
+minuto: 10:59 11:00 11:01 11:02 11:03 11:04 11:05 11:06 11:07
+                              ▲                             ▲
+                             "2"                    entrada "7"
+```
+
+No JSON, isso é o campo `entry_minutes: [2, 7]`, que vale para o **minuto de abertura do candle de entrada**.
+
+A regra só é aplicada quando o **Tempo** selecionado é igual ao `interval` do JSON (`1m`). Em outros tempos
+ela não faria sentido: no `5m`, por exemplo, os candles abrem em minutos terminados em 0 ou 5 e nunca
+bateriam com 2/7. Por isso, fora do `1m`, o monitor procura os padrões só pelas cores.
+
+### Formato de `patterns/patterns.json`
+
+```json
+{
+    "interval": "1m",
+    "patterns": [
+        {
+            "name": "Padrao 1 - CALL",
+            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM.jpeg",
+            "candles": "R G G R R R G R G",
+            "entry_minutes": [2, 7]
+        }
+    ]
+}
+```
+
+| Campo | Obrigatório | Descrição |
+|---|---|---|
+| `interval` | não (padrão `1m`) | Tempo gráfico em que os padrões foram definidos. É o tempo já selecionado ao abrir e o único em que `entry_minutes` é aplicado. |
+| `name` | sim | Nome exibido no histórico e no alerta. |
+| `candles` | sim | Sequência de `G`/`R`, separada por espaço ou vírgula. O último candle é a entrada; os anteriores, o gatilho. Pode ter qualquer tamanho a partir de 2. |
+| `entry_minutes` | não | Último dígito do minuto em que o candle de entrada pode abrir. `[]` ou ausente = qualquer horário. |
+| `image` | não | Só referência para a imagem de origem; o programa não lê o arquivo. |
+
+Para **adicionar um padrão**, inclua uma nova entrada em `patterns` e reinicie o monitor. Se o arquivo tiver
+erro (letra inválida, JSON malformado), o monitor mostra uma mensagem e não abre.
+
+### Regras da detecção
+
+- **Só candles fechados contam.** O candle em andamento muda de cor até fechar.
+- **Sequência contínua.** O gatilho só é aceito se os candles forem consecutivos (`open_time` com diferença
+  de exatamente um intervalo). Um buraco no histórico interrompe a sequência.
+- **Doji não casa.** Um candle com abertura igual ao fechamento recebe a cor `D` e quebra qualquer padrão.
+- **Sem duplicidade.** Se um candle já registrado chegar de novo (ex.: histórico recarregado após uma
+  reconexão), ele é ignorado, e cada padrão/entrada é informado uma única vez.
+- **Horário.** Os horários são exibidos em `America/Sao_Paulo`. A regra de minuto (`entry_minutes`) não é
+  afetada pelo fuso, porque os fusos usados têm deslocamento em horas inteiras.
+
+### Testando o detector sem conexão
+
+```python
+from datetime import datetime
+from core.pattern_detector import PatternDetector, load_patterns, tz   # rodando da raiz do projeto
+
+interval, patterns = load_patterns('patterns/patterns.json')
+detector = PatternDetector(patterns, interval)
+
+start = int(datetime(2026, 10, 19, 10, 59, tzinfo=tz).timestamp() * 1000)  # candle 4 = 11:02
+for i, color in enumerate('RGGRRRGRG'):
+    candle = {'open_time': start + i * 60_000, 'open': 1.0,
+              'close': 1.1 if color == 'G' else 0.9, 'is_closed': True}
+    signals, results = detector.add_closed_candle(candle)
+    for s in signals:
+        print('sinal:', s.pattern.name, s.label)        # após o 8º candle → COMPRA (CALL)
+    for s, entry_candle, outcome in results:
+        print('resultado:', outcome)                    # após o 9º candle → win (ou loss / tie)
+```
+
 ## Executável para Windows
 
 Para usar no Windows sem instalar Python, gere o `.exe` a partir do Linux (precisa de Docker):
@@ -168,18 +272,19 @@ O script roda o Python do Windows dentro do Wine (imagem `tobix/pywine:3.12`), i
 ## Arquitetura
 
 ```
-binance_monitor/
+market-monitor/
 ├── iqoption/
 │   ├── monitor_iqoption.py       # GUI: IQMonitorApp (herda MonitorApp) + login + AssetCard
+│   ├── monitor_base.py           # MonitorApp: controles, padrões, placar, histórico e alertas
 │   ├── iqoption_client.py        # IQSession (conexão) + IQMultiStream (candles de até 20 ativos)
 │   ├── backtest.py               # backtest dos padrões com candles da IQ Option
 │   ├── settings.py               # escolhas salvas (sem depender da interface gráfica)
 │   ├── requirements.txt
 │   └── README.md                 # este documento
 │
-├── binance/monitor_patterns.py   # reaproveitado: MonitorApp
-├── core/pattern_detector.py      # reaproveitado: detecção dos padrões
-└── patterns/patterns.json        # mesmos padrões do monitor da Binance
+├── core/pattern_detector.py      # detecção dos padrões (sem interface)
+├── patterns/patterns.json        # padrões + imagens de referência
+└── windows/                      # build do executável para Windows
 ```
 
 ```mermaid
@@ -196,7 +301,7 @@ flowchart LR
     end
 
     D["PatternDetector<br/>(um por ativo)"]
-    Q[("queue.Queue<br/>mesmo formato da Binance")]
+    Q[("queue.Queue<br/>eventos por ativo")]
 
     IQ <--> S
     T --> S
@@ -284,15 +389,17 @@ flowchart LR
 
 ### `monitor_iqoption.py`
 
-`IQMonitorApp` herda `MonitorApp` (de `binance/monitor_patterns.py`) e muda só o necessário. Cada ativo é um
+`IQMonitorApp` herda `MonitorApp` (de `iqoption/monitor_base.py`, a parte da janela que não depende da
+origem dos candles) e implementa o restante. Cada ativo é um
 `AssetCard` (cartão com campo do ativo, faixa de candles, termômetro e um `PatternDetector` próprio).
 
 | Método | Mudança |
 |---|---|
-| `_build_ui` | monta login, controles, cartões, padrões e histórico (a janela base é dividida em `_build_controls`, `_build_info`, `_build_strip`, `_build_patterns` e `_build_log`) |
-| `_build_asset_fields` | campos **Tipo** e **Ativos** no lugar do **Par** |
+| `_build_ui` | monta login, controles, cartões, padrões e histórico (a janela base é dividida em `_build_controls`, `_build_info`, `_build_patterns` e `_build_log`) |
+| `_build_asset_fields` | campos **Tipo** e **Ativos**, no início da linha de controles |
 | `_build_cards` / `_layout_cards` / `_fit_cards_height` | área com rolagem; colunas conforme a largura e altura conforme a janela |
 | `_load_symbols` | não carrega nada na abertura; os ativos vêm depois do login |
+| `_draw_strip` | redesenha os cartões visíveis |
 | `login` / `_process_iq_events` | login e lista de ativos numa thread, com uma fila própria; descarta listas de um tipo que já não está selecionado |
 | `_show_symbols` / `_fill_default_assets` | lista de ativos em todos os cartões; preenche cartões vazios com ativos não usados |
 | `_on_type_selected` / `_on_count_changed` / `_on_card_asset` | trocam tipo, quantidade ou ativo (reiniciando a procura, se ligada) |
@@ -306,9 +413,6 @@ flowchart LR
 | `_on_card_revised` | aplica um candle corrigido pela IQ Option, avisa se a cor mudou e corrige resultados já conferidos nele |
 | `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`, em `settings.py`) |
 | `on_close` | salva as escolhas e também fecha a sessão da IQ Option |
-
-Como depende de `MonitorApp`, mudanças futuras no monitor da Binance (nomes de métodos ou atributos como
-`interval_box`, `detector`, `stream`) podem afetar esta variação.
 
 ## Backtest com os candles da IQ Option
 
@@ -339,16 +443,6 @@ caso: no monitor a entrada é alguns segundos depois.
 
 Cuidado ao filtrar ativos ou horários pelo resultado: com muitos recortes, alguns ficam acima do equilíbrio
 por acaso. Confirme rodando de novo com outro período antes de confiar.
-
-## Diferenças em relação à Binance
-
-| | Binance | IQ Option |
-|---|---|---|
-| Autenticação | nenhuma | e-mail e senha da conta |
-| Ativos | pares SPOT (`BTC/USDT`) | binárias, blitz, digitais, forex, cripto e CFD, escolhidos no campo **Tipo** (`EUR/USD`, `EUR/USD (OTC)`) |
-| Tempos | 1m, 3m, 5m, 15m, 30m, 1h | 1m, 5m, 15m, 30m, 1h |
-| Candle fechado | enviado pelo WebSocket (`x = true`) | buscado 1 s depois do fechamento (alerta em ~1,5 s) |
-| Biblioteca | oficial/pública (REST + WebSocket) | não oficial, sem manutenção |
 
 ## Solução de problemas
 

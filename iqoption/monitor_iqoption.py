@@ -9,10 +9,10 @@ from tkinter import ttk, messagebox
 from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, MAX_ASSETS, IQMultiStream,
                                       IQOptionError, IQSession, display_name)
 from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
-from binance.monitor_patterns import (COLORS, OUTCOME_TAGS, PATTERNS_FILE, STRIP_CANDLES, MonitorApp,
-                                     hit_rate, new_stats, normalize_symbol)
-from core.pattern_detector import (DIRECTIONS, GREEN, OUTCOMES, PatternDetector, PatternError, candle_color,
-                                   ms_to_datetime, signal_outcome)
+from iqoption.monitor_base import (COLORS, OUTCOME_TAGS, STRIP_CANDLES, MonitorApp, hit_rate, new_stats,
+                                   normalize_symbol)
+from core.pattern_detector import (DIRECTIONS, GREEN, OUTCOMES, PATTERNS_FILE, PatternDetector, PatternError,
+                                   candle_color, ms_to_datetime, signal_outcome)
 
 
 DEFAULT_ASSET      = 'EUR/USD'
@@ -222,7 +222,7 @@ class AssetCard:
 
 
 class IQMonitorApp(MonitorApp):
-    """Monitor de padroes da Binance com os candles vindo da IQ Option, para ate MAX_ASSETS ativos."""
+    """Monitor de padroes com os candles vindo da IQ Option, para ate MAX_ASSETS ativos."""
 
     def __init__(self, root):
         settings = load_settings()

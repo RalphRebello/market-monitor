@@ -1,4 +1,8 @@
--r ../requiriments.txt
 # Biblioteca nao oficial da IQ Option (fixada no ultimo commit conhecido do repositorio)
 iqoptionapi @ git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git@7dd95a81c079e8af7a3728aa2aa194154f29ba3f
 websocket-client==0.56.0
+requests==2.34.2
+certifi==2026.7.22
+charset-normalizer==3.5.1
+idna==3.20
+urllib3==2.8.0
