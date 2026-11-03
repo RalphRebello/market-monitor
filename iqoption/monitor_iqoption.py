@@ -6,13 +6,12 @@ import tkinter as tk
 from time import time
 from tkinter import ttk, messagebox
 
-from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, MAX_ASSETS, IQMultiStream,
-                                      IQOptionError, IQSession, display_name)
+from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, IQMultiStream, IQOptionError, IQSession,
+                                      display_name)
 from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
-from iqoption.monitor_base import (COLORS, OUTCOME_TAGS, STRIP_CANDLES, MonitorApp, hit_rate, new_stats,
-                                   normalize_symbol)
-from core.pattern_detector import (DIRECTIONS, GREEN, OUTCOMES, PATTERNS_FILE, PatternDetector, PatternError,
-                                   candle_color, ms_to_datetime, signal_outcome)
+from iqoption.monitor_base import COLORS, STRIP_CANDLES, MonitorApp, normalize_symbol, pattern_title
+from core.pattern_detector import (DIRECTIONS, GREEN, PATTERNS_FILE, PatternDetector, PatternError, candle_color,
+                                   ms_to_datetime)
 
 
 DEFAULT_ASSET      = 'EUR/USD'
@@ -31,6 +30,7 @@ THERMO_ROW   = 22
 CARD_BG      = '#1f2630'
 CARD_BORDER  = '#3b4a5c'
 CARDS_SHARE  = 0.55    # fracao maxima da altura da janela ocupada pelos cartoes (o resto rola)
+CLOSE_COLOR  = '#e5262d'
 
 
 WHEEL_EVENTS = ('<MouseWheel>', '<Button-4>', '<Button-5>')
@@ -58,14 +58,15 @@ def heat_color(fraction):
 
 
 class AssetCard:
-    """Um ativo acompanhado: escolha do ativo, ultimos candles e termometro dos padroes."""
+    """Um ativo exibido na tela: escolha do ativo, ultimos candles e termometro dos padroes.
 
-    def __init__(self, app, parent, index):
-        self.app      = app
-        self.index    = index
-        self.var      = tk.StringVar()
-        self.name     = None    # ativo da procura em andamento
-        self.detector = None
+    So mostra o ativo: a procura acompanha todos os ativos abertos do tipo, com ou sem cartao.
+    """
+
+    def __init__(self, app, parent):
+        self.app  = app
+        self.var  = tk.StringVar()
+        self.name = None    # ativo exibido (nome valido da lista)
 
         self.frame = tk.Frame(parent, background=CARD_BORDER, padx=2, pady=2)
         body       = ttk.Frame(self.frame, padding=4)
@@ -74,17 +75,17 @@ class AssetCard:
         head = ttk.Frame(body)
         head.pack(fill='x', pady=(0, 4))
 
-        ttk.Label(head, text=f'{index + 1}.', font=('TkDefaultFont', 10, 'bold')).pack(side='left')
-
         self.box = ttk.Combobox(head, textvariable=self.var, width=20)
-        self.box.pack(side='left', padx=(4, 8))
+        self.box.pack(side='left', padx=(0, 8))
         self.box.bind('<KeyRelease>', self._filter)
         self.box.bind('<<ComboboxSelected>>', lambda _event: app._on_card_asset(self))
         self.box.bind('<Return>', lambda _event: app._on_card_asset(self))
         block_wheel(self.box, app._on_wheel)
 
-        self.stats_label = ttk.Label(head)
-        self.stats_label.pack(side='right')
+        close = tk.Label(head, text='\u2715', foreground=CLOSE_COLOR, font=('TkDefaultFont', 12, 'bold'),
+                         cursor='hand2')
+        close.pack(side='right', padx=(8, 0))
+        close.bind('<Button-1>', lambda _event: app._close_card(self))
 
         self.status_label = ttk.Label(head, foreground='#8a8f98')
         self.status_label.pack(side='left', fill='x', expand=True)
@@ -93,8 +94,11 @@ class AssetCard:
                                 background=CARD_BG, highlightthickness=0)
         self.canvas.pack(fill='x')
 
-        self.update_stats()
         self.draw()
+
+    @property
+    def detector(self):
+        return self.app.detectors.get(self.name)
 
     def _filter(self, event):
         if event.keysym in ('Return', 'Up', 'Down', 'Escape'):
@@ -105,16 +109,6 @@ class AssetCard:
 
     def set_status(self, text, error=False):
         self.status_label.configure(text=text, foreground='#d35400' if error else '#8a8f98')
-
-    def update_stats(self):
-        s = self.app.asset_stats.get(self.name) if self.name else None
-        if not s:
-            self.stats_label.configure(text='')
-            return
-
-        rate = hit_rate(s)
-        self.stats_label.configure(text=f"Sinais {s['signals']}  W {s['win']}  L {s['loss']}  E {s['tie']}" +
-                                        (f'  {rate:.0%}' if rate is not None else ''))
 
     def draw(self):
         canvas = self.canvas
@@ -138,8 +132,14 @@ class AssetCard:
         colors      = self.detector.last_colors(STRIP_CANDLES) if self.detector else ''
 
         if not colors:
-            canvas.create_text(8, 18, anchor='w', fill='#8a8f98',
-                               text='Aguardando candles...' if self.detector else 'Procura parada')
+            if self.detector:
+                text = 'Aguardando candles...'
+            elif self.app.stream:
+                text = 'Ativo fora da procura (fechado ou de outro tipo)'
+            else:
+                text = 'Procura parada'
+
+            canvas.create_text(8, 18, anchor='w', fill='#8a8f98', text=text)
             return
 
         window = min(trigger_len, len(colors))
@@ -222,7 +222,10 @@ class AssetCard:
 
 
 class IQMonitorApp(MonitorApp):
-    """Monitor de padroes com os candles vindo da IQ Option, para ate MAX_ASSETS ativos."""
+    """Monitor de padroes com os candles vindo da IQ Option.
+
+    A procura acompanha todos os ativos abertos do tipo escolhido; os cartoes so escolhem quais aparecem.
+    """
 
     def __init__(self, root):
         settings = load_settings()
@@ -234,15 +237,17 @@ class IQMonitorApp(MonitorApp):
         self.password_var = tk.StringVar(value=os.environ.get('IQ_PASSWORD', ''))
         self.type_var     = tk.StringVar(value=settings.get('asset_type') if settings.get('asset_type')
                                          in ASSET_TYPES else DEFAULT_ASSET_TYPE)
-        self.count_var    = tk.IntVar(value=settings.get('count') if settings.get('count')
-                                      in range(1, MAX_ASSETS + 1) else 1)
-        self.saved_assets = [str(name) for name in settings.get('assets', [])][:MAX_ASSETS]
+        self.saved_assets = [str(name) for name in settings.get('assets', [])]
+        # Escolhas gravadas antes dos botoes +/x: so os primeiros 'count' cartoes estavam na tela.
+        if isinstance(settings.get('count'), int):
+            self.saved_assets = self.saved_assets[:max(1, settings['count'])]
         self.resume       = bool(settings.get('searching'))    # retoma a procura apos o login
         self.cards        = []
-        self.cards_by_name = {}    # ativo da procura em andamento -> cartao
-        self.asset_stats  = {}     # ativo -> placar do ativo (sinais, win, loss) na sessao
+        self.detectors    = {}     # ativo da procura -> PatternDetector (todos os ativos, com ou sem cartao)
+        self.asset_status = {}     # ativo da procura -> (texto, erro)
         self.alerts       = []
         self.cards_layout = None
+        self.cards_columns = 0
 
         super().__init__(root)
 
@@ -266,7 +271,7 @@ class IQMonitorApp(MonitorApp):
         self._refresh_patterns()
 
         if self.saved_assets:
-            self.write_log(f'Restaurados {self.count_var.get()} ativo(s) de {SETTINGS_FILE}' +
+            self.write_log(f'Restaurados {len(self.cards)} cartao(oes) de {SETTINGS_FILE}' +
                            ('; a procura sera retomada apos o login' if self.resume else ''))
 
         self.root.after(100, self._process_iq_events)
@@ -276,10 +281,6 @@ class IQMonitorApp(MonitorApp):
     @property
     def SYMBOLS_LABEL(self):
         return f'ativos abertos ({self.type_var.get()})'
-
-    @property
-    def visible_cards(self):
-        return self.cards[:self.count_var.get()]
 
     def _build_ui(self):
         self._build_login()
@@ -319,23 +320,18 @@ class IQMonitorApp(MonitorApp):
         self.type_box.pack(side='left', padx=(4, 12))
         self.type_box.bind('<<ComboboxSelected>>', self._on_type_selected)
 
-        ttk.Label(top, text='Ativos:').pack(side='left')
-
-        count_box = ttk.Spinbox(top, from_=1, to=MAX_ASSETS, textvariable=self.count_var, width=3,
-                                state='readonly', command=self._on_count_changed)
-        count_box.pack(side='left', padx=(4, 12))
-
-        # Trocar tipo ou quantidade reinicia a procura: so com clique, nunca com a roda do mouse.
+        # Trocar o tipo reinicia a procura: so com clique, nunca com a roda do mouse.
         block_wheel(self.type_box)
-        block_wheel(count_box)
+
+        ttk.Button(top, text='+', width=3, command=self._add_card).pack(side='left', padx=(0, 12))
 
     def _build_cards(self):
         """Cartoes dos ativos numa area com rolagem; as colunas acompanham a largura da janela."""
-        area = ttk.LabelFrame(self.root, text='Ativos acompanhados', padding=4)
-        area.pack(fill='x', padx=10, pady=8)
+        self.cards_area = ttk.LabelFrame(self.root, text='Ativos na tela', padding=4)
+        self.cards_area.pack(fill='x', padx=10, pady=8)
 
-        self.cards_canvas = tk.Canvas(area, highlightthickness=0, height=1)
-        self.cards_scroll = ttk.Scrollbar(area, orient='vertical', command=self.cards_canvas.yview)
+        self.cards_canvas = tk.Canvas(self.cards_area, highlightthickness=0, height=1)
+        self.cards_scroll = ttk.Scrollbar(self.cards_area, orient='vertical', command=self.cards_canvas.yview)
         self.cards_canvas.configure(yscrollcommand=self.cards_scroll.set)
         self.cards_canvas.pack(side='left', fill='both', expand=True)
 
@@ -348,22 +344,49 @@ class IQMonitorApp(MonitorApp):
         for sequence in WHEEL_EVENTS:
             self.root.bind_all(sequence, self._on_wheel, add='+')
 
-        self._ensure_cards()
+        for name in self.saved_assets or [DEFAULT_ASSET]:
+            self._new_card(name)
 
-    def _ensure_cards(self):
-        while len(self.cards) < self.count_var.get():
-            card = AssetCard(self, self.cards_frame, len(self.cards))
-            if card.index < len(self.saved_assets):
-                card.var.set(self.saved_assets[card.index])
-            self.cards.append(card)
+        self._layout_cards(force=True)
+        self._update_cards_title()
 
-        if len(self.cards) == 1 and not self.cards[0].var.get():
-            self.cards[0].var.set(DEFAULT_ASSET)
+    def _new_card(self, typed):
+        card = AssetCard(self, self.cards_frame)
+        card.var.set(typed)
+        card.box['values'] = list(self.symbols)[:300]
+        self.cards.append(card)
+        self._show_card_asset(card, self._resolve_symbol(typed))
+        return card
+
+    def _add_card(self):
+        """Botao +: novo cartao com um ativo aberto que ainda nao esta na tela."""
+        free = self._free_assets()
+        card = self._new_card(free[0] if free else '')
+
+        self._layout_cards(force=True)
+        self._update_cards_title()
+        self.root.after_idle(lambda: self.cards_canvas.yview_moveto(1))    # mostra o cartao novo
+        self._save_settings()
+
+        if not free:
+            card.box.focus_set()
+
+    def _close_card(self, card):
+        """Botao x: tira o ativo da tela. A procura continua acompanhando o ativo."""
+        self.cards.remove(card)
+        card.frame.destroy()
+        self._layout_cards(force=True)
+        self._update_cards_title()
+        self._save_settings()
+
+    def _update_cards_title(self):
+        self.cards_area.configure(text=f'Ativos na tela ({len(self.cards)})' + (
+            f'  |  procura em {len(self.detectors)} ativos' if self.stream else ''))
 
     def _layout_cards(self, force=False):
-        """Distribui os cartoes visiveis em tantas colunas quantas couberem."""
+        """Distribui os cartoes em tantas colunas quantas couberem."""
         width   = self.cards_canvas.winfo_width()
-        count   = self.count_var.get()
+        count   = len(self.cards)
         columns = max(1, min(count, width // CARD_WIDTH))
 
         self.cards_canvas.itemconfigure(self.cards_window, width=width)
@@ -373,20 +396,20 @@ class IQMonitorApp(MonitorApp):
 
         self.cards_layout = (columns, count)
 
-        for column in range(MAX_ASSETS):
+        for column in range(max(columns, self.cards_columns)):
             self.cards_frame.columnconfigure(column, weight=1 if column < columns else 0,
                                              uniform='card' if column < columns else '')
+        self.cards_columns = columns
 
-        for card in self.cards:
-            if card.index < count:
-                card.frame.grid(row=card.index // columns, column=card.index % columns,
-                                sticky='nsew', padx=3, pady=3)
-            else:
-                card.frame.grid_forget()
+        for index, card in enumerate(self.cards):
+            card.frame.grid(row=index // columns, column=index % columns, sticky='nsew', padx=3, pady=3)
+
+        self._fit_cards_height()
 
     def _fit_cards_height(self):
         """Area dos cartoes do tamanho do conteudo, ate CARDS_SHARE da janela; acima disso, rola."""
-        needed    = self.cards_frame.winfo_reqheight()
+        self.cards_frame.update_idletasks()
+        needed    = self.cards_frame.winfo_reqheight() if self.cards else 30
         available = max(180, int(self.root.winfo_height() * CARDS_SHARE))
         height    = min(needed, available)
 
@@ -423,114 +446,98 @@ class IQMonitorApp(MonitorApp):
             card.box['values'] = values
 
     def _watched_names(self):
-        return set(self.cards_by_name) if self.stream else set()
+        return {card.name for card in self.cards if card.name}
 
-    def _fill_default_assets(self):
-        """Cartoes sem ativo valido recebem um ativo aberto ainda nao usado (EUR/USD primeiro)."""
-        cards = self.visible_cards
-        used  = {self._resolve_symbol(card.var.get()) for card in cards} - {None}
-        free  = [name for name in [DEFAULT_ASSET, *self.symbols] if name in self.symbols and name not in used]
+    def _cards_of(self, name):
+        return [card for card in self.cards if card.name == name]
 
-        for card in cards:
-            if self._resolve_symbol(card.var.get()) is None and free:
-                previous = card.var.get().strip()
-                card.var.set(free.pop(0))
-                free = [name for name in free if name != card.var.get()]
+    def _free_assets(self):
+        """Ativos abertos que ainda nao estao na tela (EUR/USD primeiro)."""
+        used = {card.name for card in self.cards}
+        return [name for name in dict.fromkeys([DEFAULT_ASSET, *self.symbols])
+                if name in self.symbols and name not in used]
 
-                if previous:
-                    self.write_log(f'Ativo {card.index + 1}: {previous} nao esta aberto em '
-                                   f'{self.type_var.get()} agora; trocado por {card.var.get()}', 'error')
-
-    def _on_count_changed(self):
-        self._ensure_cards()
-        self._fill_default_assets()
-        self._layout_cards()
-
-        # Com a procura ativa, so os ativos que entraram ou sairam mudam; os outros seguem sem reiniciar.
-        if self.stream:
-            self._sync_stream()
-
-    def _on_card_asset(self, card):
-        name = self._resolve_symbol(card.var.get())
+    def _show_card_asset(self, card, name):
+        """Liga o cartao ao ativo (None: nenhum ativo valido) e redesenha."""
+        card.name = name
         if name:
             card.var.set(name)
 
-        if self.stream and name != card.name and not self._sync_stream():
-            card.var.set(card.name)    # escolha invalida: o cartao continua no ativo que estava
+        text, error = self.asset_status.get(name, ('', False))
+        card.set_status(text, error)
+        card.draw()
 
-    def _chosen_assets(self):
-        """[(cartao, ativo)] dos cartoes visiveis; None (com aviso) se algum ativo e invalido ou repetido."""
-        chosen = []
+    def _fill_default_assets(self):
+        """Cartoes sem ativo valido recebem um ativo aberto ainda nao exibido (EUR/USD primeiro)."""
+        for card in self.cards:
+            name = self._resolve_symbol(card.var.get())
 
-        for card in self.visible_cards:
-            typed = card.var.get().strip().upper()
-            name  = self._resolve_symbol(typed)
+            if name is not None and not any(other.name == name for other in self.cards if other is not card):
+                if name != card.name:
+                    self._show_card_asset(card, name)
+                continue
 
-            if name is None:
-                messagebox.showwarning('Ativo invalido', f'Ativo {card.index + 1}: {typed or "(vazio)"} '
-                                       f'nao esta aberto em {self.type_var.get()} na IQ Option.')
-                return None
+            free = self._free_assets()
+            if not free:
+                self._show_card_asset(card, None)
+                continue
 
-            if any(name == other for _, other in chosen):
-                messagebox.showwarning('Ativo repetido', f'{name} foi escolhido mais de uma vez.')
-                return None
+            previous = card.var.get().strip()
+            self._show_card_asset(card, free[0])
 
-            card.var.set(name)
-            chosen.append((card, name))
+            if previous:
+                self.write_log(f'Cartao {previous}: nao esta aberto em {self.type_var.get()} agora; '
+                               f'trocado por {card.name}', 'error')
 
-        return chosen
+    def _on_card_asset(self, card):
+        typed = card.var.get().strip().upper()
+        name  = self._resolve_symbol(typed)
 
-    def _attach(self, card, name, interval):
-        """Liga o cartao a um ativo da procura, com um detector novo."""
-        card.name     = name
-        card.detector = PatternDetector(self.patterns, interval,
-                                        use_entry_minutes=self._use_entry_minutes(interval))
-        card.set_status('conectando...')
-        self.asset_stats.setdefault(name, new_stats())
-        self.cards_by_name[name] = card
+        if name is None:
+            if self.symbols:
+                messagebox.showwarning('Ativo invalido', f'{typed or "(vazio)"} nao esta aberto em '
+                                       f'{self.type_var.get()} na IQ Option.')
+            card.var.set(card.name or '')    # escolha invalida: o cartao continua no ativo que estava
+            return
+
+        if any(other.name == name for other in self.cards if other is not card):
+            messagebox.showwarning('Ativo repetido', f'{name} ja esta na tela.')
+            card.var.set(card.name or '')
+            return
+
+        self._show_card_asset(card, name)
+        self._save_settings()
 
     def _sync_stream(self):
-        """Leva para a procura em andamento os ativos atuais dos cartoes, sem reiniciar os que nao mudaram.
-
-        Devolve False (sem mudar nada) se algum ativo escolhido e invalido.
-        """
-        chosen = self._chosen_assets()
-        if chosen is None:
-            return False
-
-        wanted  = {name: card for card, name in chosen}
-        removed = [name for name, card in self.cards_by_name.items() if wanted.get(name) is not card]
-        added   = [(card, name) for name, card in wanted.items() if self.cards_by_name.get(name) is not card]
+        """Com a procura ligada, acompanha os ativos que abriram e deixa os que fecharam."""
+        added   = [name for name in self.symbols if name not in self.detectors]
+        removed = [name for name in self.detectors if name not in self.symbols]
 
         for name in removed:
-            card = self.cards_by_name.pop(name)
             self.stream.remove_asset(name)
+            self.detectors.pop(name)
+            self.asset_status.pop(name, None)
 
-            if not any(card is new for new, _ in added):
-                card.set_status('')    # cartao escondido: deixa de ser acompanhado
-
-        for card, name in added:
-            self._attach(card, name, self.stream.interval)
+        for name in added:
+            self._attach(name, self.stream.interval)
             self.stream.add_asset(name, self.symbols[name])
-            card.draw()
 
-        if removed or added:
-            self._update_stats()
-            self.write_log('Ativos alterados: ' +
-                           ', '.join([f'-{name}' for name in removed] + [f'+{name}' for _, name in added]) +
-                           f' (acompanhando {len(wanted)})')
-            self._save_settings()
+        if added or removed:
+            for card in self.cards:
+                if card.name in added or card.name in removed:
+                    self._show_card_asset(card, card.name)
 
-        return True
+            self._update_cards_title()
+            self.write_log(f'Procura: +{len(added)} / -{len(removed)} ativos (acompanhando {len(self.detectors)})')
 
-    def _update_stats(self):
-        super()._update_stats()
-
-        for card in self.cards:
-            card.update_stats()
+    def _attach(self, name, interval):
+        """Inclui o ativo na procura, com um detector novo."""
+        self.detectors[name]    = PatternDetector(self.patterns, interval,
+                                                  use_entry_minutes=self._use_entry_minutes(interval))
+        self.asset_status[name] = ('conectando...', False)
 
     def _draw_strip(self):
-        for card in self.visible_cards:
+        for card in self.cards:
             card.draw()
 
     # ---------------------------------------------------------------- login
@@ -621,8 +628,11 @@ class IQMonitorApp(MonitorApp):
                                              if is_open})
                     self._fill_default_assets()
 
-                    # A procura estava ligada quando o programa foi fechado: retoma com os mesmos ativos.
-                    if self.resume and not self.stream:
+                    if self.stream:
+                        self._sync_stream()
+
+                    # A procura estava ligada quando o programa foi fechado: retoma.
+                    elif self.resume:
                         self.resume = False
                         self.start_search()
 
@@ -645,42 +655,43 @@ class IQMonitorApp(MonitorApp):
             messagebox.showwarning('IQ Option', 'A lista de ativos ainda nao foi carregada.')
             return
 
-        chosen = self._chosen_assets()
-        if chosen is None:
-            return
-
-        names    = [name for _, name in chosen]
         interval = self.interval_var.get()
 
-        self.cards_by_name = {}
-        for card, name in chosen:
-            self._attach(card, name, interval)
+        self.detectors    = {}
+        self.asset_status = {}
+        for name in self.symbols:
+            self._attach(name, interval)
 
         self.close_time = None
-        self._draw_strip()
-        self._update_stats()
 
         self.stream_id += 1
-        self.stream = IQMultiStream(self.stream_id, self.session, {name: self.symbols[name] for name in names},
-                                    interval, self.events)
+        self.stream = IQMultiStream(self.stream_id, self.session, self.symbols, interval, self.events)
         self.stream.start()
+
+        for card in self.cards:
+            self._show_card_asset(card, card.name)
+
+        self._update_cards_title()
 
         self.search_button.configure(text='Parar procura')
         self.status_label.configure(text=f'Conectando em {self.stream.name} ({interval})...')
-        self.write_log(f'Procura iniciada em {", ".join(names)} ({interval})')
+        self.write_log(f'Procura iniciada em todos os {len(self.symbols)} {self.SYMBOLS_LABEL} ({interval})')
         self._save_settings()
 
     def stop_search(self):
         super().stop_search()
+        self.asset_status = {}
 
         for card in self.cards:
             card.set_status('')
 
+        self._update_cards_title()
+
     def _on_minutes_toggled(self):
         if self.stream:
             use_minutes = self._use_entry_minutes(self.stream.interval)
-            for card in self.cards_by_name.values():
-                card.detector.use_entry_minutes = use_minutes
+            for detector in self.detectors.values():
+                detector.use_entry_minutes = use_minutes
 
         self._refresh_patterns()
         self._draw_strip()
@@ -697,7 +708,7 @@ class IQMonitorApp(MonitorApp):
             while True:
                 stream_id, kind, payload = self.events.get_nowait()
 
-                # Ignora eventos de streams antigos (ativos trocados ou procura parada).
+                # Ignora eventos de streams antigos (tipo trocado ou procura parada).
                 if self.stream is None or stream_id != self.stream_id:
                     continue
 
@@ -710,142 +721,94 @@ class IQMonitorApp(MonitorApp):
                     self.close_time = payload['close_time']
                     continue
 
-                card = self.cards_by_name.get(payload['name'])
-                if card is None:
+                name     = payload['name']
+                detector = self.detectors.get(name)
+                if detector is None:
                     continue
 
                 if kind == 'history':
                     self.time_offset = payload['time_offset']
-                    self._on_card_results(card, card.detector.load_history(payload['candles']))
-                    self._log_history_signals(card, next((c for c in payload['candles']
-                                                          if not c['is_closed']), None))
-                    changed.add(card)
+                    detector.load_history(payload['candles'])
+                    self._log_history_signals(name)
+                    changed.add(name)
 
                 elif kind == 'kline':
                     self.time_offset = payload['time_offset']
-                    self._on_card_candle(card, payload['candle'], payload.get('live'))
-                    changed.add(card)
+                    self._on_asset_candle(name, payload['candle'])
+                    changed.add(name)
 
                 elif kind == 'revised':
-                    self._on_card_revised(card, payload['candle'])
-                    changed.add(card)
+                    self._on_asset_revised(name, payload['candle'])
+                    changed.add(name)
 
                 elif kind == 'asset':
-                    card.set_status(payload['text'], payload['error'])
-                    if payload['error']:
-                        self.write_log(f'{card.name}: {payload["text"]}', 'error')
+                    self.asset_status[name] = (payload['text'], payload['error'])
+                    shown = self._cards_of(name)
+
+                    for card in shown:
+                        card.set_status(payload['text'], payload['error'])
+
+                    # So os ativos na tela vao para o historico, para nao encher com todos os ativos.
+                    if payload['error'] and shown:
+                        self.write_log(f'{name}: {payload["text"]}', 'error')
 
         except queue.Empty:
             pass
 
-        if changed:
-            for card in changed:
+        for card in self.cards:
+            if card.name in changed:
                 card.draw()
-
-            self._update_stats()
 
         self.root.after(100, self._process_events)
 
-    def _on_card_candle(self, card, candle, live=None):
-        signals, results = card.detector.add_closed_candle(candle)
-        self._on_card_results(card, results)
+    def _on_asset_candle(self, name, candle):
+        # Os resultados (WIN/LOSS) que o detector confere nao sao exibidos: so os padroes formados.
+        signals, _results = self.detectors[name].add_closed_candle(candle)
 
         for signal in signals:
-            self._on_asset_signal(card, signal, live)
+            self._on_asset_signal(name, signal)
 
-    def _on_card_results(self, card, results):
-        stats = self.asset_stats[card.name]
+    def _on_asset_revised(self, name, candle):
+        """A IQ Option mudou um candle depois de enviado: troca o candle pela versao final."""
+        old_color, _changed = self.detectors[name].revise(candle)
+        when                = ms_to_datetime(candle['open_time']).strftime('%H:%M')
 
-        for signal, candle, outcome in results:
-            if signal.counted:
-                self.stats[outcome] += 1
-                stats[outcome]      += 1
-
-            # Com o preco do alerta, o resultado e o de quem entrou ao receber o alerta, nao na abertura.
-            price = '' if signal.entry_price is None else (f' (entrada {signal.entry_price}, '
-                                                           f'fechou {candle["close"]})')
-
-            self.write_log(f'Resultado {card.name} | {signal.pattern.name}: candle {candle_color(candle)}'
-                           f'{price} -> {OUTCOMES[outcome]}' +
-                           ('' if signal.counted else ' (sinal perdido, fora do placar)'),
-                           OUTCOME_TAGS.get(outcome) if signal.counted else None)
-
-    def _on_card_revised(self, card, candle):
-        """A IQ Option mudou um candle depois de enviado: corrige o candle e os resultados conferidos nele."""
-        old_color, changed = card.detector.revise(candle)
-        when               = ms_to_datetime(candle['open_time']).strftime('%H:%M')
-        stats              = self.asset_stats[card.name]
-
-        if old_color is not None:
-            self.write_log(f'{card.name}: candle {when} corrigido pela IQ Option: {old_color} -> '
+        if old_color is not None and self._cards_of(name):
+            self.write_log(f'{name}: candle {when} corrigido pela IQ Option: {old_color} -> '
                            f'{candle_color(candle)} (a busca dos padroes neste candle usou a cor antiga)', 'error')
 
-        for signal, before, after in changed:
-            if signal.counted:
-                for table in (self.stats, stats):
-                    table[before] -= 1
-                    table[after]  += 1
-
-            self.write_log(f'Resultado corrigido {card.name} | {signal.pattern.name}: candle {when} fechou em '
-                           f'{candle["close"]} -> {OUTCOMES[before]} virou {OUTCOMES[after]}', 'error')
-
-        if changed:
-            self._update_stats()
-
-    def _log_history_signals(self, card, live=None):
+    def _log_history_signals(self, name):
         """Padroes que se formaram antes de o ativo entrar na procura.
 
         Se o candle de entrada ainda esta aberto, ainda da para operar: vira um sinal com alerta (marcado
-        com o atraso) e o resultado e acompanhado. Os demais so vao para o historico, sem alerta.
+        com o atraso). Os que ja passaram sao ignorados.
         """
+        detector   = self.detectors[name]
         server_now = time() * 1000 - self.time_offset
 
-        for signal, entry_candle in card.detector.history_signals():
-            in_progress = server_now < signal.entry_open_time + card.detector.interval_ms
+        for signal, entry_candle in detector.history_signals():
+            if entry_candle is None and server_now < signal.entry_open_time + detector.interval_ms:
+                self._on_asset_signal(name, signal)
 
-            if entry_candle is None and in_progress:
-                card.detector.follow(signal)
-                self._on_asset_signal(card, signal, live)
-                continue
+    def _on_asset_signal(self, name, signal):
+        """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra.
 
-            entry = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
-
-            if entry_candle is None:
-                outcome = 'sem o candle de entrada'
-            else:
-                outcome = (f'candle {candle_color(entry_candle)} -> '
-                           f'{OUTCOMES[signal_outcome(signal, entry_candle)]}')
-
-            self.write_log(f'Historico (sem alerta): {signal.label} em {card.name} | '
-                           f'entrada {entry} | {signal.pattern.name} | {outcome}')
-
-    def _on_asset_signal(self, card, signal, live=None):
-        """Alerta de um sinal cujo candle de entrada esta aberto; se ja fechou, so registra (sem placar).
-
-        live: candle aberto recebido junto, com o preco no momento do alerta (usado no resultado).
+        Vale para qualquer ativo da procura, esteja ele na tela ou nao.
         """
-        name     = card.name
-        interval = card.detector.interval_ms / 1000
+        interval = self.detectors[name].interval_ms / 1000
         elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
         entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
 
         if elapsed >= interval:
-            signal.counted = False
-            self.write_log(f'Sinal perdido (sem alerta): {signal.label} em {name} | entrada {entry} ja '
-                           f'fechou, {int(elapsed)}s atrasado | {signal.pattern.name}', 'error')
+            self.write_log(f'Padrao perdido (sem alerta): {name} | {pattern_title(signal.pattern.name)} | '
+                           f'entrada {entry} ja fechou, {int(elapsed)}s atrasado', 'error')
             return
-
-        if live is not None and live['open_time'] == signal.entry_open_time:
-            signal.entry_price = live['close']
-
-        self.stats['signals']            += 1
-        self.asset_stats[name]['signals'] += 1
 
         if elapsed > LATE_SECONDS:
             entry += f' (atrasado {int(elapsed)}s, fecha em {int(interval - elapsed)}s)'
 
-        self.write_log(f'SINAL: {signal.label} em {name} ({self.stream.interval}) | entrada {entry} | '
-                       f'{signal.pattern.name}', 'buy' if signal.direction == GREEN else 'sell')
+        # Mesmo texto do popup: ativo, padrao formado e entrada (a hora do registro vem no inicio da linha).
+        self.write_log(f'{name} | {pattern_title(signal.pattern.name)} | entrada {entry}', 'buy')
 
         if not self.alerts_var.get():
             return
@@ -853,7 +816,7 @@ class IQMonitorApp(MonitorApp):
         # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
         self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
         alert       = self._show_alert(signal, name, entry)
-        offset      = 40 * len(self.alerts)
+        offset      = 40 * (len(self.alerts) % 10)
 
         alert.geometry(f'+{self.root.winfo_rootx() + 80 + offset}+{self.root.winfo_rooty() + 80 + offset}')
         self.alerts.append(alert)
@@ -861,10 +824,7 @@ class IQMonitorApp(MonitorApp):
     def _save_settings(self):
         settings = {
             'asset_type'    : self.type_var.get(),
-            'count'         : self.count_var.get(),
-            # Cartoes que nao chegaram a ser criados nesta sessao mantem o ativo gravado antes.
-            'assets'        : ([card.var.get().strip() for card in self.cards] +
-                               self.saved_assets[len(self.cards):]),
+            'assets'        : [card.var.get().strip() for card in self.cards],
             'interval'      : self.interval_var.get(),
             'alerts'        : self.alerts_var.get(),
             'sound'         : self.sound_var.get(),

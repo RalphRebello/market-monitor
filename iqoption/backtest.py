@@ -223,7 +223,11 @@ def main():
         elif args.assets:
             chosen = [name.strip() for name in args.assets.split(',') if name.strip()]
         else:
-            chosen = settings.get('assets', [])[:settings.get('count', 1)] or ['EUR/USD']
+            # Ativos dos cartoes do monitor (no formato antigo, so os 'count' primeiros estavam na tela).
+            chosen = settings.get('assets', [])
+            if isinstance(settings.get('count'), int):
+                chosen = chosen[:settings['count']]
+            chosen = [name for name in chosen if name] or ['EUR/USD']
 
         unknown = [name for name in chosen if name not in api_names]
         if unknown:

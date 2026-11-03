@@ -1,11 +1,12 @@
 import queue
+import re
 import tkinter as tk
 from time import time
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, LOSS, PATTERNS_FILE, RED, WIN,
-                                   load_patterns, ms_to_datetime)
+from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, PATTERNS_FILE, RED, load_patterns,
+                                   ms_to_datetime)
 
 
 ALERT_SECONDS  = 30
@@ -21,21 +22,9 @@ COLORS = {
 }
 
 
-# Tag do historico para cada resultado (empate sem destaque).
-OUTCOME_TAGS = {
-    WIN  : 'buy',
-    LOSS : 'sell',
-}
-
-
-def new_stats():
-    return {'signals': 0, 'win': 0, 'loss': 0, 'tie': 0}
-
-
-def hit_rate(stats):
-    """Acerto sobre os sinais decididos (empates nao contam); None sem resultados."""
-    decided = stats['win'] + stats['loss']
-    return stats['win'] / decided if decided else None
+def pattern_title(name):
+    """Nome do padrao sem a direcao no final: 'Padrao 1 - CALL' vira 'Padrao 1'."""
+    return re.sub(r'\s*-\s*(CALL|PUT)\s*$', '', name, flags=re.IGNORECASE) or name
 
 
 def normalize_symbol(text):
@@ -44,7 +33,7 @@ def normalize_symbol(text):
 
 
 class MonitorApp:
-    """Janela base do monitor: controles, padroes, placar, historico e alertas.
+    """Janela base do monitor: controles, padroes, historico e alertas.
 
     A subclasse monta a janela (_build_ui, _build_asset_fields), carrega os ativos (_load_symbols,
     _show_symbols, _watched_names), inicia a procura (start_search) e processa os eventos (_process_events).
@@ -67,7 +56,6 @@ class MonitorApp:
         self.symbol_keys = {}    # normalize_symbol(nome) -> nome exibido
         self.time_offset = 0
         self.close_time  = None
-        self.stats       = new_stats()
 
         self.interval_var = tk.StringVar(value=self.patterns_interval)
         self.alerts_var   = tk.BooleanVar(value=True)
@@ -130,12 +118,8 @@ class MonitorApp:
         self._refresh_patterns()
 
     def _build_log(self):
-        self.stats_label = ttk.Label(self.root, padding=(10, 6))
-        self.stats_label.pack(fill='x')
-        self._update_stats()
-
         self.log = ScrolledText(self.root, height=14, state='disabled', font=('Courier', 10))
-        self.log.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self.log.pack(fill='both', expand=True, padx=10, pady=10)
         self.log.tag_configure('buy', foreground=COLORS[GREEN], font=('Courier', 10, 'bold'))
         self.log.tag_configure('sell', foreground=COLORS[RED], font=('Courier', 10, 'bold'))
         self.log.tag_configure('error', foreground='#d35400')
@@ -171,13 +155,6 @@ class MonitorApp:
 
             label.configure(text=f'{pattern.name}:  {" ".join(pattern.trigger)}  ->  '
                                  f'{DIRECTIONS[pattern.direction]}  |  {timing}')
-
-    def _update_stats(self):
-        s    = self.stats
-        rate = hit_rate(s)
-        self.stats_label.configure(text=f"Sinais: {s['signals']}   Win: {s['win']}   Loss: {s['loss']}   "
-                                        f"Empate: {s['tie']}" +
-                                        (f'   Acerto: {rate:.0%}' if rate is not None else ''))
 
     # ------------------------------------------------------------- symbols
 
@@ -239,18 +216,19 @@ class MonitorApp:
     # -------------------------------------------------------------- alerts
 
     def _show_alert(self, signal, symbol, entry):
-        color = COLORS[signal.direction]
+        # Sempre verde: o alerta avisa que um padrao se formou, sem destacar a direcao.
+        color = COLORS[GREEN]
 
         alert = tk.Toplevel(self.root)
         alert.title('Padrao encontrado')
         alert.configure(background=color)
         alert.attributes('-topmost', True)
 
-        tk.Label(alert, text=signal.label, font=('sans', 26, 'bold'),
+        tk.Label(alert, text=symbol, font=('sans', 26, 'bold'),
                  background=color, foreground='white').pack(padx=30, pady=(20, 6))
-        tk.Label(alert, text=f'{symbol}  |  entrada {entry}', font=('sans', 14),
+        tk.Label(alert, text=pattern_title(signal.pattern.name), font=('sans', 16, 'bold'),
                  background=color, foreground='white').pack(padx=30)
-        tk.Label(alert, text=signal.pattern.name, font=('sans', 11),
+        tk.Label(alert, text=f'entrada {entry}', font=('sans', 12),
                  background=color, foreground='white').pack(padx=30, pady=(4, 10))
         ttk.Button(alert, text='OK', command=alert.destroy).pack(pady=(0, 16))
 

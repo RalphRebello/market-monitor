@@ -1,7 +1,8 @@
 # Monitor de padrões: IQ Option
 
 Monitor com interface gráfica que procura, em tempo real, as sequências de candles definidas em
-`patterns/patterns.json` nos ativos da **IQ Option** e gera alertas de **COMPRA (CALL)** ou **VENDA (PUT)**.
+`patterns/patterns.json` em **todos os ativos abertos** de um tipo da **IQ Option**. Quando um padrão se forma,
+abre um popup verde com o ativo, o padrão e o horário da entrada, e registra a mesma mensagem no histórico.
 
 > **Atenção**
 > - A IQ Option **não tem API pública**. Este monitor usa a biblioteca não oficial
@@ -50,92 +51,83 @@ IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.m
    o ativo certo. Ativos fechados não aparecem e, se digitados, são recusados. A lista é atualizada a cada
    5 minutos, porque os mercados abrem e fecham (ex.: forex fecha no fim de semana e a versão OTC abre).
    Mudanças aparecem no histórico
-   (`Lista atualizada: N ativos abertos (+x / -y)`), e se o ativo monitorado fechar aparece o aviso
+   (`Lista atualizada: N ativos abertos (+x / -y)`), e se um ativo da tela fechar aparece o aviso
    `<ATIVO> deixou de estar ativo`.
-4. Em **Ativos**, escolha quantos ativos acompanhar ao mesmo tempo (1 a 20). Cada ativo ganha um cartão
-   numerado com seu próprio campo de ativo; os cartões novos já vêm preenchidos com ativos abertos ainda não
-   usados (o primeiro é `EUR/USD`). O mesmo ativo não pode ser escolhido duas vezes.
+4. Escolha quais ativos aparecem na tela: o botão **+** (ao lado do **Tipo**) adiciona um cartão, já
+   preenchido com um ativo aberto que ainda não está na tela (o primeiro é `EUR/USD`), e o **✕** vermelho no
+   canto superior direito do cartão o fecha. Não há limite de cartões. O ativo de cada cartão pode ser
+   trocado no seu campo; o mesmo ativo não pode estar em dois cartões. **Os cartões só escolhem o que
+   aparece na tela: a procura acompanha todos os ativos abertos do tipo**, com ou sem cartão.
 5. Escolha o **Tempo** (`1m`, `5m`, `15m`, `30m` ou `1h`; a IQ Option não tem candle de 3m). Ele vale para
    todos os ativos.
-6. Clique em **Iniciar procura**. Com a procura ligada, trocar o ativo de um cartão ou a quantidade
-   **só mexe nos ativos que entraram ou saíram**: os demais continuam sem reiniciar (sem perder um padrão
-   que acabou de se formar), e o histórico mostra `Ativos alterados: -AUD/USD, +EUR/JPY (acompanhando N)`.
-   Se o ativo escolhido for inválido ou repetido, aparece um aviso e o cartão volta ao ativo anterior.
-   Trocar o **Tempo** ou o **Tipo** reinicia a procura de todos.
-7. Um padrão que já estava formado quando o ativo entrou na procura (ao iniciar, ao trocar o ativo ou
-   ao recarregar o histórico depois de uma reconexão) **gera alerta se o candle de entrada ainda estiver
-   aberto**. Se a entrada já fechou, ele só aparece no histórico como `Historico (sem alerta)`, com o
-   resultado.
+6. Clique em **Iniciar procura**. A procura passa a acompanhar **todos os ativos abertos do tipo**
+   (`Procura iniciada em todos os N ativos abertos (<tipo>)`), e um padrão em qualquer um deles gera o
+   alerta, mesmo que o ativo não esteja na tela. Adicionar, fechar ou trocar cartões com a procura ligada não
+   reinicia nada. Quando a lista de ativos é atualizada, os que abriram entram na procura e os que fecharam
+   saem (`Procura: +x / -y ativos`). Se o ativo escolhido num cartão for inválido ou repetido, aparece um
+   aviso e o cartão volta ao ativo anterior. Trocar o **Tempo** ou o **Tipo** reinicia a procura de todos.
+7. Um padrão que já estava formado quando o ativo entrou na procura (ao iniciar, quando o ativo abre e
+   entra na procura ou ao recarregar o histórico depois de uma reconexão) **gera alerta se o candle de entrada ainda estiver
+   aberto**. Se a entrada já fechou, ele é ignorado.
 
 Os demais controles:
 
 | Controle | O que faz |
 |---|---|
-| **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde (COMPRA) ou vermelho (VENDA), que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
+| **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
 | **Exigir horario de entrada** | Caixa no quadro de padrões. Desligada (padrão): os padrões valem em qualquer horário. Ligada: exige a [regra 2/7](#restrição-de-horário-27--opcional-desligada-por-padrão). Pode ser trocada com a procura em andamento. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da IQ Option. |
-| **Histórico** | Todos os eventos com horário: conexão, sinais, resultados e erros. |
+| **Histórico** | Eventos com horário: conexão e erros e, para cada padrão formado, a mesma mensagem do popup: `15:17:02 Gold/BRL \| Padrao 2 \| entrada 15:17`. O monitor não mostra resultados (WIN/LOSS) nem placar: só avisa os padrões formados (para medir o acerto, use o [backtest](#backtest-com-os-candles-da-iq-option)). |
 
 ### Alertas no tempo certo
 
 - O alerta mostra o atraso quando chega mais de 3 s depois da abertura do candle de entrada:
-  `SINAL: ... | entrada 12:30 (atrasado 8s, fecha em 52s)`. Isso acontece, por exemplo, depois de uma
+  `EUR/USD | Padrao 1 | entrada 12:30 (atrasado 8s, fecha em 52s)`. Isso acontece, por exemplo, depois de uma
   reconexão ou quando a IQ Option demora a entregar o candle fechado.
 - Se o candle de entrada **já fechou** quando o padrão chega (ex.: vários candles chegando juntos depois de
-  uma queda de conexão), não há alerta: o histórico mostra `Sinal perdido (sem alerta): ... ja fechou, Ns
-  atrasado`, e o resultado aparece como `(sinal perdido, fora do placar)`, sem contar no placar.
+  uma queda de conexão), não há alerta: o histórico mostra `Padrao perdido (sem alerta): ... ja fechou, Ns
+  atrasado`.
 - Quando o candle recém-fechado ainda não veio, o ativo é consultado de novo a cada 0,5 s nos primeiros
   segundos (antes, a espera começava em 2 s), porque cada segundo de atraso come a entrada.
 
-### Placar e resultado
+### Candle corrigido
 
-- **Empate**: se o candle de entrada fecha no mesmo preço da entrada, a IQ Option devolve o valor. O
-  resultado aparece como `EMPATE` e não conta como WIN nem LOSS. O placar geral mostra
-  `Sinais / Win / Loss / Empate / Acerto` e o de cada cartão `Sinais W L E` com o acerto; o acerto
-  considera só WIN e LOSS.
-- **Preço do alerta**: junto com o candle fechado vem o candle que acabou de abrir, com o preço do momento
-  do alerta. O resultado compara o fechamento do candle de entrada com **esse preço** (o de quem entrou ao
-  receber o alerta), e não com a abertura do candle:
-  `Resultado EUR/USD | Padrao 1 - CALL: candle G (entrada 1.08412, fechou 1.08431) -> WIN`.
-- Se a conexão cai com um sinal aguardando o resultado e o histórico é recarregado, o resultado é
-  registrado a partir do histórico (antes ele se perdia).
-- **Candle corrigido**: cada candle é conferido de novo no lote seguinte. Se a IQ Option mudou o preço
-  depois (um tick atrasado), o candle é trocado pela versão final. Se a cor mudou, o histórico avisa
-  `candle 12:30 corrigido pela IQ Option: R -> G`; se um resultado já conferido mudou, o placar é corrigido
-  e aparece `Resultado corrigido ... WIN virou LOSS`.
+Cada candle é conferido de novo no lote seguinte. Se a IQ Option mudou o preço depois (um tick atrasado), o
+candle é trocado pela versão final. Se a cor mudou num ativo da tela, o histórico avisa
+`candle 12:30 corrigido pela IQ Option: R -> G`.
 
 ### Escolhas salvas entre uma execução e outra
 
-Ao fechar a janela (e ao iniciar uma procura), o monitor grava em
-`~/.config/monitor_padroes/iqoption.json` o **Tipo**, a quantidade e os ativos de cada cartão, o **Tempo**,
+Ao fechar a janela, ao iniciar uma procura e ao adicionar, fechar ou trocar um cartão, o monitor grava em
+`~/.config/monitor_padroes/iqoption.json` o **Tipo**, os ativos dos cartões na tela, o **Tempo**,
 as opções **Alertas ativos**, **Som** e **Exigir horario de entrada**, o tamanho da janela e se a procura
-estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N ativo(s)`.
+estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N cartao(oes)`.
 
 - **E-mail e senha não são gravados.** Continue usando `IQ_EMAIL`/`IQ_PASSWORD` se não quiser digitá-los.
 - Se a procura estava ligada ao fechar, ela **é retomada sozinha** logo depois do login, assim que a lista
-  de ativos chega, com os mesmos ativos.
+  de ativos chega.
 - Se um ativo salvo não estiver aberto agora (ex.: forex no fim de semana), ele é trocado por um ativo
-  aberto ainda não usado, com o aviso `Ativo N: <ativo> nao esta aberto em <tipo> agora; trocado por ...`.
-- Os ativos de cartões escondidos (ao diminuir a quantidade) também ficam salvos e voltam ao aumentar.
+  aberto ainda não usado, com o aviso `Cartao <ativo>: nao esta aberto em <tipo> agora; trocado por ...`.
 - Para usar outro arquivo, defina `IQ_SETTINGS_FILE=/caminho/arquivo.json`. Para voltar ao padrão, apague o
   arquivo. Um arquivo inválido é ignorado.
 
 ### Cartões dos ativos
 
-Cada ativo acompanhado tem um cartão com:
+Cada ativo na tela tem um cartão com:
 
-- o campo do ativo, a situação (`ao vivo`, `sem cotacao recente (ativo fechado?)` ou o erro) e o placar
-  do ativo (`Sinais  W  L  E` e o acerto, somado durante a sessão, mesmo que a procura seja reiniciada);
+- o campo do ativo, o **✕** para fechar o cartão, e a situação (`ao vivo`, `sem cotacao recente (ativo fechado?)` ou o erro);
 - a faixa dos últimos candles fechados, numerada como o gatilho (1..8) e a entrada (9);
 - o termômetro dos padrões (abaixo).
 
 O cartão ganha borda amarela quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
 quantas couberem na largura da janela (um cartão precisa de cerca de 540 px) e se reorganizam ao
 redimensionar. A área dos cartões cresce até 55% da altura da janela; acima disso aparece uma barra de
-rolagem (também funciona a roda do mouse sobre os cartões). O placar geral (`Sinais / Win / Loss / Empate`), a
-contagem regressiva e o histórico continuam únicos, com o nome do ativo em cada mensagem. Se vários ativos
-sinalizarem no mesmo candle, os alertas abrem em cascata para não se cobrirem.
+rolagem (também funciona a roda do mouse sobre os cartões). A contagem
+regressiva e o histórico são únicos, com o nome do ativo em cada mensagem, e valem para todos os ativos da
+procura. O título da área mostra `Ativos na tela (N) | procura em M ativos`. Se vários ativos
+sinalizarem no mesmo candle, os alertas abrem em cascata para não se cobrirem. Avisos de erro de um ativo
+(ex.: `sem cotacao recente`) só vão para o histórico quando o ativo está na tela.
 
 ### Termômetro dos padrões
 
@@ -275,8 +267,8 @@ O script roda o Python do Windows dentro do Wine (imagem `tobix/pywine:3.12`), i
 market-monitor/
 ├── iqoption/
 │   ├── monitor_iqoption.py       # GUI: IQMonitorApp (herda MonitorApp) + login + AssetCard
-│   ├── monitor_base.py           # MonitorApp: controles, padrões, placar, histórico e alertas
-│   ├── iqoption_client.py        # IQSession (conexão) + IQMultiStream (candles de até 20 ativos)
+│   ├── monitor_base.py           # MonitorApp: controles, padrões, histórico e alertas
+│   ├── iqoption_client.py        # IQSession (conexão) + IQMultiStream (candles de todos os ativos)
 │   ├── backtest.py               # backtest dos padrões com candles da IQ Option
 │   ├── settings.py               # escolhas salvas (sem depender da interface gráfica)
 │   ├── requirements.txt
@@ -293,7 +285,7 @@ flowchart LR
 
     subgraph client["iqoption_client.py"]
         S["IQSession<br/>login · ativos · get-candles"]
-        T["IQMultiStream (thread)<br/>histórico + candles fechados<br/>de até 20 ativos, em lote"]
+        T["IQMultiStream (thread)<br/>histórico + candles fechados<br/>de todos os ativos abertos, em lote"]
     end
 
     subgraph gui["monitor_iqoption.py"]
@@ -350,33 +342,35 @@ flowchart LR
   - `get_candles(active_id, size, count, end_time)`: reimplementa o `get_candles` da biblioteca com
     **timeout** (o original espera para sempre se a resposta não chegar). Funciona para todos os tipos,
     porque os candles são buscados pelo `active_id`.
+  - `get_candles_many(pedidos)`: busca os candles de vários ativos **de uma vez**. Envia todos os pedidos
+    `get-candles` juntos, cada um com um `request_id` próprio (`monitor-N`), e reconhece cada resposta pelo
+    `request_id`. A biblioteca guarda só a última resposta de candles, o que obrigaria a pedir um ativo por
+    vez. As respostas são capturadas por um gancho no `on_message` do websocket, refeito a cada login. Se
+    nenhuma resposta vier com o `request_id` (o servidor deixou de devolvê-lo), a sessão passa a pedir um
+    ativo por vez com `get_candles`; isso só acontece se chegarem respostas de candles sem o `request_id`.
+    Sem resposta nenhuma, o erro é `NoReplyError` (conexão caída) e o envio em lote continua ligado.
 - **`display_name(nome)`**: converte o nome da API para o da plataforma (`EURUSD-OTC` → `EUR/USD (OTC)`,
   `ATOMUSD-L` → `ATOM/USD (L)`). Pares de moedas conhecidos (`CURRENCIES`) e cripto cotadas numa moeda de
   `QUOTES` ganham a barra; o sufixo interno `-op` é removido; os demais nomes (ex.: ações como `AMAZON`,
   `AA:US`) ficam como vêm.
-  - `get_candles_many(pedidos)`: busca os candles de vários ativos **de uma vez**. Envia todos os pedidos
-    `get-candles` juntos, cada um com um `request_id` próprio (`monitor-N`), e reconhece cada resposta pelo
-    `request_id`. Com isso, 20 ativos levam praticamente o tempo de um (a biblioteca guarda só a última
-    resposta de candles, o que obrigaria a pedir um ativo por vez). As respostas são capturadas por um gancho
-    no `on_message` do websocket, refeito a cada login. Se nenhuma resposta vier com o `request_id` (o
-    servidor deixou de devolvê-lo), a sessão passa a pedir um ativo por vez com `get_candles`; isso só
-    acontece se chegarem respostas de candles sem o `request_id`. Sem resposta nenhuma, o erro é
-    `NoReplyError` (conexão caída) e o envio em lote continua ligado.
-- **`IQMultiStream`** (thread): acompanha todos os ativos escolhidos numa única thread e envia eventos com
-  o nome do ativo:
+- **`IQMultiStream`** (thread): acompanha todos os ativos abertos do tipo numa única thread e envia eventos
+  com o nome do ativo:
   1. no início, busca os últimos 30 candles de todos os ativos num único lote e envia cada um como histórico;
   2. pelo relógio do servidor, avisa a abertura de cada candle (para a contagem regressiva, comum a todos);
   3. 1 s depois de cada fechamento, busca num único lote os candles recém-fechados dos ativos que ainda
-     não os receberam (o lote volta em ~0,4 s). Antes eram 0,3 s, mas o fechamento ainda não é final tão
+     não os receberam. Medido com uma conta real (3 fechamentos em cada caso), todos os ativos responderam
+     e o candle chegou ~1,5–1,7 s após o fechamento com os 144 ativos abertos de binárias e ~2,7–3,2 s com
+     os 729 de CFD / Ações. A espera de 1 s já foi de 0,3 s, mas o fechamento ainda não é final tão
      cedo: medido em 40 ativos (160 candles), lido 0,5 s depois ~9% ainda mudavam de preço por ticks
      atrasados; a partir de 1 s, nenhum. Em lentidões eventuais da IQ Option ele ainda pode mudar, e a
-     conferência no lote seguinte corrige (veja [Placar e resultado](#placar-e-resultado));
+     conferência no lote seguinte corrige (veja [Candle corrigido](#candle-corrigido));
   4. um ativo sem candle novo é tentado de novo a cada 0,5 s nas 6 primeiras vezes (atraso do servidor) e
      depois com espera crescente (2 s, 4 s ... até 30 s; mercado fechado), sem atrasar os outros; se
      faltarem mais de 3 candles (ex.: após uma reconexão), o histórico do ativo é recarregado sem alertas;
-     o evento `kline` leva também o candle aberto (`live`), cujo preço é o do momento do alerta;
-  5. `add_asset` / `remove_asset` (chamados pela GUI) incluem ou tiram um ativo com a procura ligada; a
-     mudança é aplicada entre um lote e outro, e o ativo novo recebe o histórico no lote seguinte;
+     o evento `kline` leva também o candle aberto (`live`), não usado pela janela;
+  5. `add_asset` / `remove_asset` (chamados pela GUI quando a lista de ativos é atualizada) incluem um ativo
+     que abriu ou tiram um que fechou, com a procura ligada; a mudança é aplicada entre um lote e outro, e o
+     ativo novo recebe o histórico no lote seguinte;
   6. se a conexão cair, reconecta com espera progressiva (1 s até 60 s). Conta como queda: o websocket
      fechado, um erro da biblioteca ao enviar o pedido ou **nenhum ativo responder** dentro de 15 s (conexão
      "meio aberta", em que o websocket parece aberto mas nada chega). Nesses casos a reconexão é feita mesmo
@@ -390,27 +384,28 @@ flowchart LR
 ### `monitor_iqoption.py`
 
 `IQMonitorApp` herda `MonitorApp` (de `iqoption/monitor_base.py`, a parte da janela que não depende da
-origem dos candles) e implementa o restante. Cada ativo é um
-`AssetCard` (cartão com campo do ativo, faixa de candles, termômetro e um `PatternDetector` próprio).
+origem dos candles) e implementa o restante. Cada ativo da procura tem um `PatternDetector` em
+`detectors`; cada ativo na tela é um `AssetCard` (campo do ativo, ✕, faixa de candles e termômetro), que só
+desenha o detector do seu ativo.
 
 | Método | Mudança |
 |---|---|
 | `_build_ui` | monta login, controles, cartões, padrões e histórico (a janela base é dividida em `_build_controls`, `_build_info`, `_build_patterns` e `_build_log`) |
-| `_build_asset_fields` | campos **Tipo** e **Ativos**, no início da linha de controles |
+| `_build_asset_fields` | campo **Tipo** e botão **+**, no início da linha de controles |
 | `_build_cards` / `_layout_cards` / `_fit_cards_height` | área com rolagem; colunas conforme a largura e altura conforme a janela |
 | `_load_symbols` | não carrega nada na abertura; os ativos vêm depois do login |
-| `_draw_strip` | redesenha os cartões visíveis |
+| `_draw_strip` | redesenha os cartões |
 | `login` / `_process_iq_events` | login e lista de ativos numa thread, com uma fila própria; descarta listas de um tipo que já não está selecionado |
 | `_show_symbols` / `_fill_default_assets` | lista de ativos em todos os cartões; preenche cartões vazios com ativos não usados |
-| `_on_type_selected` / `_on_count_changed` / `_on_card_asset` | trocam tipo, quantidade ou ativo (reiniciando a procura, se ligada) |
+| `_add_card` / `_close_card` / `_on_card_asset` | botões **+** e **✕** e troca do ativo de um cartão (sem mexer na procura) |
+| `_on_type_selected` | troca o tipo (encerra a procura e recarrega a lista) |
 | `SYMBOLS_LABEL` | vira uma property, para o histórico mostrar o tipo (`ativos abertos (Forex)`) |
-| `start_search` | exige login, valida os ativos dos cartões (`_chosen_assets`) e cria um `IQMultiStream` |
-| `_sync_stream` / `_attach` | com a procura ligada, inclui/remove no stream só os ativos que mudaram |
-| `_log_history_signals` | padrão do histórico com a entrada ainda aberta vira sinal com alerta (`PatternDetector.follow` acompanha o resultado) |
-| `_process_events` | eventos por ativo; cada cartão alterado é redesenhado uma vez por rodada |
-| `_on_asset_signal` | sinal com o nome do ativo e o atraso; entrada já fechada vira `Sinal perdido`; guarda o preço do alerta; alertas em cascata |
-| `_on_card_results` | resultados WIN/LOSS/EMPATE no placar geral e no do cartão (sinais perdidos ficam fora) |
-| `_on_card_revised` | aplica um candle corrigido pela IQ Option, avisa se a cor mudou e corrige resultados já conferidos nele |
+| `start_search` | exige login e cria um `IQMultiStream` com todos os ativos abertos do tipo, cada um com seu detector |
+| `_sync_stream` / `_attach` | a cada atualização da lista, inclui no stream os ativos que abriram e tira os que fecharam |
+| `_log_history_signals` | padrão do histórico com a entrada ainda aberta vira sinal com alerta; os que já passaram são ignorados |
+| `_process_events` | eventos por ativo; os cartões dos ativos alterados são redesenhados uma vez por rodada |
+| `_on_asset_signal` | sinal de qualquer ativo da procura (na tela ou não), com o nome do ativo e o atraso; no histórico, o mesmo texto do popup; entrada já fechada vira `Padrao perdido`; alertas em cascata |
+| `_on_asset_revised` | aplica um candle corrigido pela IQ Option e avisa se a cor mudou |
 | `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`, em `settings.py`) |
 | `on_close` | salva as escolhas e também fecha a sessão da IQ Option |
 
@@ -427,7 +422,7 @@ usando o mesmo detector do monitor. Ele só lê candles: não opera nem grava na
 ```
 
 E-mail e senha vêm de `IQ_EMAIL`/`IQ_PASSWORD` ou são pedidos no terminal. Sem `--assets`/`--all`, usa o tipo
-e os ativos salvos pelo monitor. Os candles vêm em lotes de 1000 por ativo, todos os ativos juntos.
+e os ativos dos cartões salvos pelo monitor. Os candles vêm em lotes de 1000 por ativo, todos os ativos juntos.
 
 O relatório mostra, no total, por padrão, por ativo e por hora da entrada:
 
@@ -452,10 +447,12 @@ por acaso. Confirme rodando de novo com outro período antes de confiar.
 | `Falha no login` mencionando verificação/2FA | Contas com autenticação em dois fatores não são suportadas pela biblioteca. |
 | `Sem resposta da IQ Option em 40s` | Rede bloqueada ou mudança no protocolo da IQ Option que a biblioteca não acompanha. |
 | `<ATIVO> sem cotacao recente (ativo fechado?)` | Mercado fechado (ex.: forex no fim de semana). Use a versão `-OTC` do ativo. |
-| `Nao foi possivel carregar os ativos` | O login funcionou, mas a lista falhou. Uma nova tentativa é feita a cada 5 minutos; ou clique em **Entrar** de novo. |
-| `Sinal perdido (sem alerta)` | O candle fechado chegou depois de a entrada fechar (conexão caiu ou a IQ Option atrasou). |
-| Padrão visível no gráfico do site, mas sem alerta | Se ele se formou **antes** de o ativo entrar na procura e o candle de entrada já fechou, não há alerta (a entrada já passou); ele aparece no histórico como `Historico (sem alerta)`, com o resultado. Se a entrada ainda estava aberta, há alerta, marcado como `em andamento`. Se aconteceu com a procura ligada, confira se **Exigir horario de entrada** está marcada (ela restringe a entrada aos minutos 2/7) e se o **Tipo** é o mesmo do gráfico: Forex e Blitz do mesmo par têm cotações ligeiramente diferentes, e um candle quase doji pode mudar de cor. |
-| `<ATIVO> nao esta aberto na IQ Option` | O ativo está fechado ou suspenso agora. Escolha um da lista. Se no site ele aparece aberto, gere o diagnóstico abaixo. |
+| `Nao foi possivel carregar <tipo>` | O login funcionou, mas a lista falhou. Uma nova tentativa é feita a cada 5 minutos; ou clique em **Entrar** de novo. |
+| `Padrao perdido (sem alerta)` | O candle fechado chegou depois de a entrada fechar (conexão caiu ou a IQ Option atrasou). |
+| Padrão visível no gráfico do site, mas sem alerta | Se ele se formou **antes** de o ativo entrar na procura e o candle de entrada já fechou, não há alerta (a entrada já passou). Se a entrada ainda estava aberta, há alerta, marcado com o atraso (`atrasado Ns, fecha em Ns`). Se aconteceu com a procura ligada, confira se **Exigir horario de entrada** está marcada (ela restringe a entrada aos minutos 2/7) e se o **Tipo** é o mesmo do gráfico: Forex e Blitz do mesmo par têm cotações ligeiramente diferentes, e um candle quase doji pode mudar de cor. |
+| `<ATIVO> nao esta aberto em <tipo> na IQ Option` | O ativo está fechado ou suspenso agora, ou é de outro tipo. Escolha um da lista. Se no site ele aparece aberto, gere o diagnóstico abaixo. |
+| Lista de ativos dos cartões vazia | Faça login primeiro: a lista só é carregada depois do login. |
+| Cartão com `Ativo fora da procura (fechado ou de outro tipo)` | O ativo do cartão não está entre os abertos do tipo. Troque o ativo do cartão ou o **Tipo**. |
 
 ### Diagnóstico da lista de ativos
 
@@ -469,4 +466,3 @@ IQ_DUMP_ASSETS=iqoption_ativos.json .venv/bin/python -m iqoption.monitor_iqoptio
 Depois do login, o arquivo `iqoption_ativos.json` traz os dados brutos do **tipo selecionado**
 (`asset_type`), com os campos `enabled`, `is_suspended` e `schedule` usados para decidir se cada ativo está
 aberto, além de `server_time`. Cada troca de tipo ou atualização da lista sobrescreve o arquivo.
-| Lista de pares vazia | Faça login primeiro. |

@@ -46,7 +46,6 @@ CONNECT_TIMEOUT  = 40
 # Espera apos o fechamento antes de buscar o candle fechado. Medido: lido 0,5 s depois, ~9% dos candles ainda
 # mudavam de preco (ticks atrasados); a partir de 1 s, nenhum (fora de lentidoes eventuais da IQ Option).
 CLOSE_FETCH_WAIT = 1.0
-MAX_ASSETS       = 20     # ativos acompanhados ao mesmo tempo
 REQUEST_PREFIX   = 'monitor-'    # request_id dos pedidos de candles deste monitor
 MAX_RETRY_WAIT   = 30     # espera maxima (s) para tentar de novo um ativo sem candle novo
 FAST_RETRY_WAIT  = 0.5    # logo apos o fechamento, tenta de novo rapido: cada segundo atrasa o alerta
@@ -365,7 +364,7 @@ class IQSession:
     def get_candles_many(self, requests):
         """Candles de varios ativos de uma vez: requests = [(active_id, size, count, end_time)].
 
-        Os pedidos vao todos juntos e cada resposta e reconhecida pelo request_id, entao 20 ativos
+        Os pedidos vao todos juntos e cada resposta e reconhecida pelo request_id, entao muitos ativos
         levam praticamente o tempo de um. Devolve, na mesma ordem, a lista de candles ou um
         IQOptionError para cada pedido.
         """
@@ -490,7 +489,7 @@ def candles_from_reply(reply):
 
 
 class IQMultiStream(threading.Thread):
-    """Acompanha os candles de varios ativos (ate MAX_ASSETS) numa unica thread.
+    """Acompanha os candles de varios ativos (todos os abertos de um tipo) numa unica thread.
 
     Envia para a fila da GUI eventos (stream_id, tipo, dados):
       history  {'name', 'candles', 'time_offset'}  candles recentes do ativo (sem alerta)
