@@ -226,7 +226,7 @@ class MonitorApp:
 
     # -------------------------------------------------------------- alerts
 
-    def _show_alert(self, signal, symbol, entry):
+    def _show_alert(self, signal, symbol, entry, on_click=None):
         # Sempre verde: o alerta avisa que um padrao se formou, sem destacar a direcao.
         color = COLORS[GREEN]
 
@@ -241,7 +241,24 @@ class MonitorApp:
                  background=color, foreground='white').pack(padx=30)
         tk.Label(alert, text=f'entrada {entry}', font=('sans', 12),
                  background=color, foreground='white').pack(padx=30, pady=(4, 10))
-        ttk.Button(alert, text='OK', command=alert.destroy).pack(pady=(0, 16))
+
+        if on_click:
+            tk.Label(alert, text='clique para abrir o card', font=('sans', 10),
+                     background=color, foreground='white').pack(padx=30, pady=(0, 10))
+
+        ok = ttk.Button(alert, text='Fechar alerta', command=alert.destroy)
+        ok.pack(pady=(0, 16))
+
+        if on_click:
+            def clicked(event):
+                if event.widget is not ok:
+                    alert.destroy()
+                    on_click()
+
+            # O bind na janela vale para os textos dentro dela; o botao continua so fechando.
+            alert.configure(cursor='hand2')
+            ok.configure(cursor='arrow')
+            alert.bind('<Button-1>', clicked)
 
         alert.after(ALERT_SECONDS * 1000, alert.destroy)
 

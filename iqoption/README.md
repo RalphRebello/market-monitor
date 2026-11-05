@@ -75,7 +75,7 @@ Os demais controles:
 | Controle | O que faz |
 |---|---|
 | **Filtro de minutos 2/7** | Fica em **Padrões carregados** e vem ligado. Ligado: em `1m`, os Padrões 1 a 4 só valem com o candle 4 em minuto final 2 ou 7 (candle 9 em 7 ou 2). Desligado: valem em qualquer horário. Pode ser trocado com a procura ligada, sem reiniciá-la, e a escolha fica salva. Não afeta os Padrões 5 e 6. |
-| **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
+| **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Clicar no popup, fora do botão **Fechar alerta**, fecha-o, traz o monitor para a frente e abre o card do ativo; se o card já existir, mostra o que está aberto. Desligado: o sinal só aparece no histórico. |
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da IQ Option. |
 | **Histórico** | Eventos com horário: conexão e erros e, para cada padrão formado, a mesma mensagem do popup: `15:17:02 Gold/BRL \| Padrao 2 \| entrada 15:17`. O monitor não mostra resultados (WIN/LOSS) nem placar: só avisa os padrões formados (para medir o acerto, use o [backtest](#backtest-com-os-candles-da-iq-option)). |
@@ -121,7 +121,7 @@ Cada ativo na tela tem um cartão com:
 - em cada grupo, a faixa dos últimos candles fechados, numerada como o gatilho e a entrada (1..8 e 9,
   1..12 e 13, 1..7 e 8), e o termômetro desses padrões (abaixo).
 
-O cartão ganha borda amarela quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
+O cartão ganha borda vermelha quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
 quantas couberem na largura da janela (um cartão precisa de cerca de 540 px) e se reorganizam ao
 redimensionar. A área dos cartões cresce até 55% da altura da janela; acima disso aparece uma barra de
 rolagem (também funciona a roda do mouse sobre os cartões). A contagem

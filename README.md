@@ -17,6 +17,7 @@ histórico, em qual ativo e qual padrão se formou e o horário da entrada. A do
 - cartões na tela adicionados com o botão **+** e fechados com o **✕**, sem limite, cada um com uma faixa de
   candles por tamanho de padrão (gatilho e entrada numerados) e o **termômetro dos padrões** (quanto de cada
   gatilho já se formou, quantos candles faltam e o horário previsto da entrada);
+- clique no popup para abrir o card do ativo que alertou;
 - filtro de minutos 2/7 nos Padrões 1 a 4, que liga e desliga no painel (só em `1m`); o Padrão 6 tem regra
   própria e fixa (candle 1 em minuto final 1), e o Padrão 5 vale em qualquer horário;
 - janela responsiva: os cartões se reorganizam em colunas conforme a largura, com rolagem quando não cabem;

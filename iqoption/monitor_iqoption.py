@@ -32,6 +32,7 @@ CARD_GAP     = 10      # espaco do separador entre os grupos de padroes
 SEPARATOR    = '#5d6f85'
 CARD_BG    = '#1f2630'
 CARD_BORDER  = '#3b4a5c'
+CARD_FORMED  = '#e5262d'    # borda do cartao com padrao formado
 CARDS_SHARE  = 0.55    # fracao maxima da altura da janela ocupada pelos cartoes (o resto rola)
 CLOSE_COLOR  = '#e5262d'
 
@@ -132,7 +133,7 @@ class AssetCard:
         progress  = [rows.get(pattern, (pattern, 0, None)) for pattern in patterns]
         any_done  = any(formed == len(pattern.trigger) for pattern, formed, _ in progress)
 
-        self.frame.configure(background=HEAT_DONE if any_done else CARD_BORDER)
+        self.frame.configure(background=CARD_FORMED if any_done else CARD_BORDER)
 
         y = 0
         for group in self.groups:
@@ -416,6 +417,32 @@ class IQMonitorApp(MonitorApp):
 
         if not free:
             card.box.focus_set()
+
+    def _open_alert_card(self, name):
+        """Clique no popup: traz a janela para a frente e mostra o cartao do ativo, criando-o se preciso."""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+        if name not in self.symbols:
+            self.write_log(f'{name} nao esta mais aberto em {self.type_var.get()}; cartao nao aberto', 'error')
+            return
+
+        card = next((card for card in self.cards if card.name == name), None)
+
+        if card is None:
+            card = self._new_card(name)
+            self._layout_cards(force=True)
+            self._update_cards_title()
+            self._save_settings()
+
+        self.root.after_idle(lambda: self._scroll_to_card(card))
+
+    def _scroll_to_card(self, card):
+        self.cards_frame.update_idletasks()
+
+        if card.frame.winfo_exists():
+            self.cards_canvas.yview_moveto(card.frame.winfo_y() / max(1, self.cards_frame.winfo_reqheight()))
 
     def _close_card(self, card):
         """Botao x: tira o ativo da tela. A procura continua acompanhando o ativo."""
@@ -901,7 +928,7 @@ class IQMonitorApp(MonitorApp):
 
         # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
         self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
-        alert       = self._show_alert(signal, name, entry)
+        alert       = self._show_alert(signal, name, entry, on_click=lambda: self._open_alert_card(name))
         offset      = 40 * (len(self.alerts) % 10)
 
         alert.geometry(f'+{self.root.winfo_rootx() + 80 + offset}+{self.root.winfo_rooty() + 80 + offset}')
