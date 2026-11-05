@@ -2,11 +2,11 @@
 
 Uso (da raiz do projeto):
     .venv/bin/python -m iqoption.backtest                       # ativos salvos no monitor, 7 dias
-    .venv/bin/python -m iqoption.backtest --days 14 --entry-minutes
+    .venv/bin/python -m iqoption.backtest --days 14
     .venv/bin/python -m iqoption.backtest --assets "EUR/USD (OTC),GBP/USD" --payout 0.85
     .venv/bin/python -m iqoption.backtest --all                 # todos os ativos abertos do tipo
 
-E-mail e senha vem de IQ_EMAIL / IQ_PASSWORD ou sao pedidos no terminal; nada e gravado e nenhuma
+E-mail e senha vem de IQ_LOGIN (ou IQ_EMAIL) / IQ_PASSWORD ou sao pedidos no terminal; nada e gravado e nenhuma
 operacao e feita.
 """
 import argparse
@@ -135,7 +135,10 @@ def fetch_history(session, assets, size, days):
 
 
 def simulate(candles_by_asset, patterns, interval, use_entry_minutes, payouts):
-    """Roda o detector do monitor candle a candle; entrada na abertura do candle 9."""
+    """Roda o detector do monitor candle a candle; entrada na abertura do candle seguinte ao gatilho.
+
+    Padroes sem direcao (alert_only) nao tem WIN/LOSS e ficam fora do placar.
+    """
     tallies = {'pattern': defaultdict(Tally), 'asset': defaultdict(Tally), 'hour': defaultdict(Tally),
                'total': defaultdict(Tally)}
 
@@ -182,7 +185,7 @@ def parse_args():
     parser.add_argument('--all', action='store_true', help='todos os ativos abertos do tipo')
     parser.add_argument('--days', type=float, default=7, help='dias de historico (padrao 7)')
     parser.add_argument('--interval', default=None, help='tempo dos candles (padrao: o do patterns.json)')
-    parser.add_argument('--entry-minutes', action='store_true', help='aplica a regra de horario (ex.: 2/7)')
+    parser.add_argument('--entry-minutes', action='store_true', help='liga o filtro de minutos (2/7) dos Padroes 1 a 4')
     parser.add_argument('--payout', type=float, help='payout fixo (0.85 = 85%%) em vez do informado pela IQ')
 
     return parser.parse_args()
@@ -205,7 +208,7 @@ def main():
     if args.entry_minutes and not use_minutes:
         print(f'Regra de horario ignorada: so vale em {patterns_interval}', file=sys.stderr)
 
-    email    = os.environ.get('IQ_EMAIL') or input('E-mail da IQ Option: ')
+    email    = os.environ.get('IQ_LOGIN') or os.environ.get('IQ_EMAIL') or input('E-mail da IQ Option: ')
     password = os.environ.get('IQ_PASSWORD') or getpass.getpass('Senha: ')
 
     session = IQSession()
@@ -256,8 +259,8 @@ def main():
 
     print(f'\nBacktest: {len(candles)} ativo(s), {total_candles} candles de {interval}, {args.days:g} dias, '
           f'regra de horario {"ligada" if use_minutes else "desligada"}')
-    print(f'Entrada na abertura do candle 9; empate = valor devolvido. Payout medio {mean_payout:.0%} '
-          f'-> acerto minimo {breakeven(mean_payout):.1%}')
+    print(f'Entrada na abertura do candle seguinte ao gatilho; empate = valor devolvido; padroes sem direcao '
+          f'ficam de fora. Payout medio {mean_payout:.0%} -> acerto minimo {breakeven(mean_payout):.1%}')
     print('saldo/100 = lucro em unidades apostadas a cada 100 sinais (1 unidade por entrada)\n')
 
     sections = (('Total', 'total'), ('Por padrao', 'pattern'), ('Por ativo', 'asset'),

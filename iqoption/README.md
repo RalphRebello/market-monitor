@@ -37,7 +37,7 @@ preencher os campos; as credenciais nunca são gravadas em disco (as demais esco
 [Escolhas salvas](#escolhas-salvas-entre-uma-execução-e-outra)).
 
 ```bash
-IQ_EMAIL='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.monitor_iqoption
+IQ_LOGIN='voce@email.com' IQ_PASSWORD='sua-senha' .venv/bin/python -m iqoption.monitor_iqoption
 ```
 
 1. Preencha **E-mail** e **Senha** e clique em **Entrar** (ou pressione Enter no campo da senha).
@@ -74,9 +74,9 @@ Os demais controles:
 
 | Controle | O que faz |
 |---|---|
+| **Filtro de minutos 2/7** | Fica em **Padrões carregados** e vem ligado. Ligado: em `1m`, os Padrões 1 a 4 só valem com o candle 4 em minuto final 2 ou 7 (candle 9 em 7 ou 2). Desligado: valem em qualquer horário. Pode ser trocado com a procura ligada, sem reiniciá-la, e a escolha fica salva. Não afeta os Padrões 5 e 6. |
 | **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Desligado: o sinal só aparece no histórico. |
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
-| **Exigir horario de entrada** | Caixa no quadro de padrões. Desligada (padrão): os padrões valem em qualquer horário. Ligada: exige a [regra 2/7](#restrição-de-horário-27--opcional-desligada-por-padrão). Pode ser trocada com a procura em andamento. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da IQ Option. |
 | **Histórico** | Eventos com horário: conexão e erros e, para cada padrão formado, a mesma mensagem do popup: `15:17:02 Gold/BRL \| Padrao 2 \| entrada 15:17`. O monitor não mostra resultados (WIN/LOSS) nem placar: só avisa os padrões formados (para medir o acerto, use o [backtest](#backtest-com-os-candles-da-iq-option)). |
 
@@ -101,10 +101,10 @@ candle é trocado pela versão final. Se a cor mudou num ativo da tela, o histó
 
 Ao fechar a janela, ao iniciar uma procura e ao adicionar, fechar ou trocar um cartão, o monitor grava em
 `~/.config/monitor_padroes/iqoption.json` o **Tipo**, os ativos dos cartões na tela, o **Tempo**,
-as opções **Alertas ativos**, **Som** e **Exigir horario de entrada**, o tamanho da janela e se a procura
+as opções **Alertas ativos** e **Som**, o tamanho da janela e se a procura
 estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N cartao(oes)`.
 
-- **E-mail e senha não são gravados.** Continue usando `IQ_EMAIL`/`IQ_PASSWORD` se não quiser digitá-los.
+- **E-mail e senha não são gravados.** Continue usando `IQ_LOGIN`/`IQ_PASSWORD` se não quiser digitá-los (`IQ_EMAIL` também é aceito no lugar de `IQ_LOGIN`).
 - Se a procura estava ligada ao fechar, ela **é retomada sozinha** logo depois do login, assim que a lista
   de ativos chega.
 - Se um ativo salvo não estiver aberto agora (ex.: forex no fim de semana), ele é trocado por um ativo
@@ -117,8 +117,9 @@ estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Res
 Cada ativo na tela tem um cartão com:
 
 - o campo do ativo, o **✕** para fechar o cartão, e a situação (`ao vivo`, `sem cotacao recente (ativo fechado?)` ou o erro);
-- a faixa dos últimos candles fechados, numerada como o gatilho (1..8) e a entrada (9);
-- o termômetro dos padrões (abaixo).
+- três grupos separados por uma linha horizontal: Padrões 1 a 4, Padrão 5 e Padrão 6;
+- em cada grupo, a faixa dos últimos candles fechados, numerada como o gatilho e a entrada (1..8 e 9,
+  1..12 e 13, 1..7 e 8), e o termômetro desses padrões (abaixo).
 
 O cartão ganha borda amarela quando algum padrão se forma nele. Os cartões se distribuem em tantas colunas
 quantas couberem na largura da janela (um cartão precisa de cerca de 540 px) e se reorganizam ao
@@ -131,59 +132,73 @@ sinalizarem no mesmo candle, os alertas abrem em cascata para não se cobrirem. 
 
 ### Termômetro dos padrões
 
-Em cada cartão, uma linha por padrão mostra o quanto do gatilho (os 8 candles antes da
+Em cada cartão, uma linha por padrão mostra o quanto do gatilho (os candles antes da
 entrada) já se formou nos últimos candles fechados:
 
 - os quadrados do gatilho ficam preenchidos com a cor de cada candle já formado; o próximo candle esperado
   aparece com contorno tracejado na cor que precisa ter;
 - a barra do termômetro enche e esquenta conforme o padrão avança (azul até 50%, amarelo até 75%, laranja
   depois) e mostra a porcentagem;
-- o texto diz quantos candles faltam e o horário previsto da entrada; com 8/8 aparece
-  `FORMADO: COMPRA (CALL)` / `VENDA (PUT)` com o horário da entrada (o próximo candle).
+- o texto diz quantos candles faltam e o horário previsto da entrada; com o gatilho completo aparece
+  `FORMADO: COMPRA (CALL)` / `VENDA (PUT)` com o horário da entrada (o próximo candle), ou
+  `FORMADO: entrada HH:MM` nos padrões sem direção (5 e 6).
 
 Conta o maior trecho final dos candles fechados que repete o início do gatilho
 (`PatternDetector.pattern_progress`). Se um candle sai diferente do esperado, o termômetro cai para o
-trecho que ainda serve (às vezes 0). Com **Exigir horario de entrada** marcada, só conta se a entrada
-prevista cair num minuto aceito (2/7); senão o padrão fica em 0%. O termômetro usa só candles fechados (a
+trecho que ainda serve (às vezes 0). Com regra de minuto valendo (Padrão 6 sempre; Padrões 1 a 4 com o filtro
+ligado, em `1m`), só conta se a entrada prevista cair no minuto aceito; senão ele fica em 0%. O termômetro usa só candles fechados (a
 IQ Option não envia o preço do candle em andamento).
 
 ## Padrões
 
-Os padrões vêm das imagens em `patterns/` e estão descritos em `patterns/patterns.json`. Cada padrão tem 9
-candles: os **8 primeiros são o gatilho** e o **9º é a entrada**, e a cor dele define a direção.
+Os padrões vêm das imagens em `patterns/` e estão descritos em `patterns/patterns.json`. Nos Padrões 1 a 4,
+os **8 primeiros candles são o gatilho** e o **9º é a entrada**, e a cor dele define a direção. Nos Padrões 5
+e 6, **todos os candles são o gatilho**, não há direção e o alerta sai no candle seguinte ao último.
 
-| Padrão | Imagem | Gatilho (candles 1 a 8) | Entrada (candle 9) |
-|---|---|---|---|
-| 1 | `WhatsApp Image ... 9.57.39 AM.jpeg` | R G G R R R G R | G → COMPRA (CALL) |
-| 2 | `WhatsApp Image ... 9.57.39 AM (1).jpeg` | G R R G G G R G | R → VENDA (PUT) |
-| 3 | `WhatsApp Image ... 9.57.40 AM.jpeg` | G R R G R R G R | G → COMPRA (CALL) |
-| 4 | `WhatsApp Image ... 9.57.40 AM (1).jpeg` | R G G R G G R G | R → VENDA (PUT) |
+| Padrão | Imagem | Gatilho | Alerta | Horário |
+|---|---|---|---|---|
+| 1 | `pattern_1.jpeg` | R G G R R R G R | candle 9: G → COMPRA (CALL) | filtro 2/7 (opcional) |
+| 2 | `pattern_2.jpeg` | G R R G G G R G | candle 9: R → VENDA (PUT) | filtro 2/7 (opcional) |
+| 3 | `pattern_3.jpeg` | G R R G R R G R | candle 9: G → COMPRA (CALL) | filtro 2/7 (opcional) |
+| 4 | `pattern_4.jpeg` | R G G R G G R G | candle 9: R → VENDA (PUT) | filtro 2/7 (opcional) |
+| 5 | `pattern_5.jpeg` | R G G R R R G R G G R R | candle 13, sem direção | qualquer |
+| 6 | `pattern_6.jpeg` | R G G R R R G | candle 8, sem direção | candle 1 em minuto final 1 |
 
 `G` = candle verde (fechamento > abertura), `R` = candle vermelho (fechamento < abertura).
 
-### Restrição de horário (2/7) — opcional, desligada por padrão
+### Restrição de horário
 
-> Por padrão os padrões são procurados **só pelas cores, em qualquer horário**. A regra de horário é ligada
-> pela caixa **Exigir horario de entrada**, no quadro de padrões, e pode ser ligada/desligada com a procura
-> em andamento. A escolha fica salva entre uma execução e outra; o valor inicial é `DEFAULT_ENTRY_MINUTES`,
-> em `iqoption/monitor_base.py`.
+Os Padrões 1 a 5 usam o **Tempo** escolhido.
 
-Nas imagens, o candle 4 está marcado com **2/7** e o candle 9 com **7/2**. Com a regra ligada, o monitor
-interpreta isso como horário no gráfico de 1 minuto: o candle 4 abre num minuto terminado em 2 ou 7 e,
-cinco candles depois, a entrada abre no outro (7 ou 2).
+**Padrões 1 a 4: filtro 2/7, opcional.** Como marcam as imagens, o candle 4 abre em minuto final 2 ou 7, e o
+candle 9, cinco minutos depois, em final 7 ou 2:
 
 ```
 candle:   1     2     3     4     5     6     7     8     9
 minuto: 10:59 11:00 11:01 11:02 11:03 11:04 11:05 11:06 11:07
-                              ▲                             ▲
-                             "2"                    entrada "7"
+                            ▲                             ▲
+                           "2"                           "7"
 ```
 
-No JSON, isso é o campo `entry_minutes: [2, 7]`, que vale para o **minuto de abertura do candle de entrada**.
+O filtro só existe em `1m`: em `5m` os candles abrem em minutos 0 ou 5, então ali os padrões valem sempre.
+Com o filtro desligado, valem em qualquer horário.
 
-A regra só é aplicada quando o **Tempo** selecionado é igual ao `interval` do JSON (`1m`). Em outros tempos
-ela não faria sentido: no `5m`, por exemplo, os candles abrem em minutos terminados em 0 ou 5 e nunca
-bateriam com 2/7. Por isso, fora do `1m`, o monitor procura os padrões só pelas cores.
+**Padrão 5: sem regra de horário.**
+
+**Padrão 6: regra própria e fixa, que o filtro não afeta.** Ele é independente: é sempre
+acompanhado em `1m`, qualquer que seja o **Tempo** (fora do `1m`, o monitor abre um segundo stream e o mostra
+como `Padrao 6 (1m)` no cartão). Ele exige que o candle 1 abra num minuto terminado em 1; o candle 8, do
+alerta, abre então num minuto terminado em 8:
+
+```
+candle:   1     2     3     4     5     6     7     8
+minuto: 11:01 11:02 11:03 11:04 11:05 11:06 11:07 11:08
+          ▲                                         ▲
+         "1"                                 alerta "8"
+```
+
+No JSON, as regras ficam em `entry_minutes`, que vale para o **minuto de abertura do candle de entrada**:
+`[7, 2]` nos Padrões 1 a 4 e `[8]` no Padrão 6.
 
 ### Formato de `patterns/patterns.json`
 
@@ -192,10 +207,12 @@ bateriam com 2/7. Por isso, fora do `1m`, o monitor procura os padrões só pela
     "interval": "1m",
     "patterns": [
         {
-            "name": "Padrao 1 - CALL",
-            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM.jpeg",
+            "name": "Padrao 1",
+            "image": "pattern_1.jpeg",
             "candles": "R G G R R R G R G",
-            "entry_minutes": [2, 7]
+            "entry_minutes": [7, 2],
+            "minutes_candle": 4,
+            "minutes_optional": true
         }
     ]
 }
@@ -203,10 +220,14 @@ bateriam com 2/7. Por isso, fora do `1m`, o monitor procura os padrões só pela
 
 | Campo | Obrigatório | Descrição |
 |---|---|---|
-| `interval` | não (padrão `1m`) | Tempo gráfico em que os padrões foram definidos. É o tempo já selecionado ao abrir e o único em que `entry_minutes` é aplicado. |
+| `interval` | não (padrão `1m`) | Tempo gráfico em que os padrões foram definidos. É o tempo já selecionado ao abrir e o único em que o filtro de minutos é aplicado. |
 | `name` | sim | Nome exibido no histórico e no alerta. |
 | `candles` | sim | Sequência de `G`/`R`, separada por espaço ou vírgula. O último candle é a entrada; os anteriores, o gatilho. Pode ter qualquer tamanho a partir de 2. |
+| `alert_only` | não (padrão `false`) | `true`: todos os candles são o gatilho, sem direção, e o alerta sai no candle seguinte ao último. Esses padrões ficam fora do backtest, que não tem como dar WIN/LOSS sem direção. |
+| `interval` (no padrão) | não | Tempo fixo do padrão, independente do **Tempo** escolhido no monitor. Ausente = usa o **Tempo** escolhido. |
 | `entry_minutes` | não | Último dígito do minuto em que o candle de entrada pode abrir. `[]` ou ausente = qualquer horário. |
+| `minutes_candle` | não (padrão `1`) | Candle marcado na imagem. Só muda o texto da regra no painel, como `candle 4 em minutos final 2/7 e candle 9 em final 7/2`. |
+| `minutes_optional` | não (padrão `false`) | `true`: a regra obedece ao **Filtro de minutos** do painel. `false`: `entry_minutes` vale sempre. |
 | `image` | não | Só referência para a imagem de origem; o programa não lê o arquivo. |
 
 Para **adicionar um padrão**, inclua uma nova entrada em `patterns` e reinicie o monitor. Se o arquivo tiver
@@ -416,12 +437,12 @@ usando o mesmo detector do monitor. Ele só lê candles: não opera nem grava na
 
 ```bash
 .venv/bin/python -m iqoption.backtest                         # ativos salvos no monitor, últimos 7 dias
-.venv/bin/python -m iqoption.backtest --days 14 --entry-minutes
+.venv/bin/python -m iqoption.backtest --days 14
 .venv/bin/python -m iqoption.backtest --assets "EUR/USD (OTC),GBP/USD" --payout 0.85
 .venv/bin/python -m iqoption.backtest --all --days 3          # todos os ativos abertos do tipo
 ```
 
-E-mail e senha vêm de `IQ_EMAIL`/`IQ_PASSWORD` ou são pedidos no terminal. Sem `--assets`/`--all`, usa o tipo
+E-mail e senha vêm de `IQ_LOGIN`/`IQ_PASSWORD` ou são pedidos no terminal. Sem `--assets`/`--all`, usa o tipo
 e os ativos dos cartões salvos pelo monitor. Os candles vêm em lotes de 1000 por ativo, todos os ativos juntos.
 
 O relatório mostra, no total, por padrão, por ativo e por hora da entrada:
@@ -449,7 +470,7 @@ por acaso. Confirme rodando de novo com outro período antes de confiar.
 | `<ATIVO> sem cotacao recente (ativo fechado?)` | Mercado fechado (ex.: forex no fim de semana). Use a versão `-OTC` do ativo. |
 | `Nao foi possivel carregar <tipo>` | O login funcionou, mas a lista falhou. Uma nova tentativa é feita a cada 5 minutos; ou clique em **Entrar** de novo. |
 | `Padrao perdido (sem alerta)` | O candle fechado chegou depois de a entrada fechar (conexão caiu ou a IQ Option atrasou). |
-| Padrão visível no gráfico do site, mas sem alerta | Se ele se formou **antes** de o ativo entrar na procura e o candle de entrada já fechou, não há alerta (a entrada já passou). Se a entrada ainda estava aberta, há alerta, marcado com o atraso (`atrasado Ns, fecha em Ns`). Se aconteceu com a procura ligada, confira se **Exigir horario de entrada** está marcada (ela restringe a entrada aos minutos 2/7) e se o **Tipo** é o mesmo do gráfico: Forex e Blitz do mesmo par têm cotações ligeiramente diferentes, e um candle quase doji pode mudar de cor. |
+| Padrão visível no gráfico do site, mas sem alerta | Se ele se formou **antes** de o ativo entrar na procura e o candle de entrada já fechou, não há alerta (a entrada já passou). Se a entrada ainda estava aberta, há alerta, marcado com o atraso (`atrasado Ns, fecha em Ns`). Se aconteceu com a procura ligada, confira se o **Tipo** é o mesmo do gráfico (e, em `1m`, se o minuto bate: Padrão 6 com candle 1 em final 1; Padrões 1 a 4 com o filtro ligado, candle 4 em final 2 ou 7): Forex e Blitz do mesmo par têm cotações ligeiramente diferentes, e um candle quase doji pode mudar de cor. |
 | `<ATIVO> nao esta aberto em <tipo> na IQ Option` | O ativo está fechado ou suspenso agora, ou é de outro tipo. Escolha um da lista. Se no site ele aparece aberto, gere o diagnóstico abaixo. |
 | Lista de ativos dos cartões vazia | Faça login primeiro: a lista só é carregada depois do login. |
 | Cartão com `Ativo fora da procura (fechado ou de outro tipo)` | O ativo do cartão não está entre os abertos do tipo. Troque o ativo do cartão ou o **Tipo**. |

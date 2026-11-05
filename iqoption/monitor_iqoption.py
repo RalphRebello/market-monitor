@@ -27,7 +27,10 @@ HEAT_DONE   = '#f1c40f'
 CARD_WIDTH   = 540     # largura minima de um cartao; define quantas colunas cabem na janela
 CARD_STRIP   = 40
 THERMO_ROW   = 22
-CARD_BG      = '#1f2630'
+THERMO_SQUARES = 120   # largura dos quadrados do gatilho na linha do termometro
+CARD_GAP     = 10      # espaco do separador entre os grupos de padroes
+SEPARATOR    = '#5d6f85'
+CARD_BG    = '#1f2630'
 CARD_BORDER  = '#3b4a5c'
 CARDS_SHARE  = 0.55    # fracao maxima da altura da janela ocupada pelos cartoes (o resto rola)
 CLOSE_COLOR  = '#e5262d'
@@ -55,6 +58,15 @@ def heat_color(fraction):
         return HEAT_DONE
 
     return next(color for limit, color in HEAT_COLORS if fraction <= limit)
+
+
+def pattern_group(pattern):
+    """Padroes do mesmo tamanho e tempo dividem a faixa de candles do cartao."""
+    return len(pattern.trigger), pattern.interval
+
+
+def strip_name(pattern):
+    return f'{pattern.name} ({pattern.interval})' if pattern.interval else pattern.name
 
 
 class AssetCard:
@@ -90,15 +102,15 @@ class AssetCard:
         self.status_label = ttk.Label(head, foreground='#8a8f98')
         self.status_label.pack(side='left', fill='x', expand=True)
 
-        self.canvas = tk.Canvas(body, height=CARD_STRIP + len(app.patterns) * THERMO_ROW + 2,
-                                background=CARD_BG, highlightthickness=0)
+        # Um grupo por tamanho de gatilho e tempo: faixa de candles, termometros desses padroes e separador.
+        self.groups = list(dict.fromkeys(pattern_group(pattern) for pattern in app.patterns))
+        height      = (len(self.groups) * CARD_STRIP + (len(self.groups) - 1) * CARD_GAP +
+                       len(app.patterns) * THERMO_ROW + 2)
+
+        self.canvas = tk.Canvas(body, height=height, background=CARD_BG, highlightthickness=0)
         self.canvas.pack(fill='x')
 
         self.draw()
-
-    @property
-    def detector(self):
-        return self.app.detectors.get(self.name)
 
     def _filter(self, event):
         if event.keysym in ('Return', 'Up', 'Down', 'Escape'):
@@ -114,62 +126,88 @@ class AssetCard:
         canvas = self.canvas
         canvas.delete('all')
 
-        patterns = self.app.patterns
-        progress = (self.detector.pattern_progress() if self.detector
-                    else [(pattern, 0, None) for pattern in patterns])
-        forming  = [pattern for pattern, formed, _ in progress if formed == len(pattern.trigger)]
+        patterns  = self.app.patterns
+        detectors = {self.app.detector_of(self.name, pattern) for pattern in patterns} - {None}
+        rows      = {row[0]: row for detector in detectors for row in detector.pattern_progress()}
+        progress  = [rows.get(pattern, (pattern, 0, None)) for pattern in patterns]
+        any_done  = any(formed == len(pattern.trigger) for pattern, formed, _ in progress)
 
-        self.frame.configure(background=HEAT_DONE if forming else CARD_BORDER)
-        self._draw_strip(forming)
+        self.frame.configure(background=HEAT_DONE if any_done else CARD_BORDER)
 
-        for row, (pattern, formed, entry) in enumerate(progress):
-            self._draw_thermometer(CARD_STRIP + row * THERMO_ROW, pattern, formed, entry)
+        y = 0
+        for group in self.groups:
+            if y:
+                # A largura real do canvas acompanha a janela; o excesso da linha fica cortado.
+                canvas.create_line(0, y + 2, 4000, y + 2, fill=SEPARATOR, width=2)
+                y += CARD_GAP
 
-    def _draw_strip(self, forming):
-        """Candles fechados; os ultimos (gatilho) numerados 1..8 e o candle de entrada como 9."""
-        canvas      = self.canvas
-        trigger_len = max(len(pattern.trigger) for pattern in self.app.patterns)
-        colors      = self.detector.last_colors(STRIP_CANDLES) if self.detector else ''
+            size    = group[0]
+            members = [row for row in progress if pattern_group(row[0]) == group]
+            forming = [pattern for pattern, formed, _ in members if formed == size]
+
+            self._draw_strip(y, size, [row[0] for row in members], forming)
+            y += CARD_STRIP
+
+            for pattern, formed, entry in members:
+                self._draw_thermometer(y, pattern, formed, entry)
+                y += THERMO_ROW
+
+    def _draw_strip(self, y, trigger_len, patterns, forming):
+        """Candles fechados; os ultimos numerados como o gatilho (1..N) e o candle de entrada como N+1."""
+        canvas   = self.canvas
+        detector = self.app.detector_of(self.name, patterns[0])
+        colors   = detector.last_colors(STRIP_CANDLES) if detector else ''
 
         if not colors:
-            if self.detector:
+            if y:    # A situacao aparece so na primeira faixa; as outras mostram de que padroes sao.
+                text = ' / '.join(strip_name(pattern) for pattern in patterns)
+            elif detector:
                 text = 'Aguardando candles...'
             elif self.app.stream:
                 text = 'Ativo fora da procura (fechado ou de outro tipo)'
             else:
                 text = 'Procura parada'
 
-            canvas.create_text(8, 18, anchor='w', fill='#8a8f98', text=text)
+            canvas.create_text(8, y + 18, anchor='w', fill='#8a8f98', text=text)
             return
 
         window = min(trigger_len, len(colors))
         first  = len(colors) - window
         x0     = lambda i: 6 + i * 18
 
-        canvas.create_rectangle(x0(first) - 3, 1, x0(len(colors)) - 3, 35, fill='#2c3746',
+        canvas.create_rectangle(x0(first) - 3, y + 1, x0(len(colors)) - 3, y + 35, fill='#2c3746',
                                 outline=HEAT_DONE if forming else '', width=2)
 
         for i, color in enumerate(colors):
             x = x0(i)
-            canvas.create_rectangle(x, 14, x + 13, 32, fill=COLORS[color], outline='')
+            canvas.create_rectangle(x, y + 14, x + 13, y + 32, fill=COLORS[color], outline='')
 
             if i >= first:
-                canvas.create_text(x + 6, 7, text=str(trigger_len - (len(colors) - 1 - i)),
+                canvas.create_text(x + 6, y + 7, text=str(trigger_len - (len(colors) - 1 - i)),
                                    fill='#e8e8e8', font=('TkDefaultFont', 7, 'bold'))
 
         # Candle de entrada (ainda aberto): contorno tracejado; seta e cor da operacao se o padrao formou.
-        x       = x0(len(colors))
-        outline = COLORS[forming[0].direction] if forming else '#8a8f98'
+        # Padrao sem direcao: so destaca que formou. Enquanto nao forma, a faixa mostra de que padrao e.
+        x         = x0(len(colors))
+        pattern   = forming[0] if forming else None
+        direction = pattern.direction if pattern else None
+        outline   = COLORS[direction] if direction else HEAT_DONE if pattern else '#8a8f98'
 
-        canvas.create_text(x + 6, 7, text=str(trigger_len + 1), fill=outline, font=('TkDefaultFont', 7, 'bold'))
-        canvas.create_rectangle(x, 14, x + 13, 32, outline=outline, dash=(3, 2), width=2)
+        canvas.create_text(x + 6, y + 7, text=str(trigger_len + 1), fill=outline, font=('TkDefaultFont', 7, 'bold'))
+        canvas.create_rectangle(x, y + 14, x + 13, y + 32, outline=outline, dash=(3, 2), width=2)
 
-        if forming:
-            pattern   = forming[0]
-            tip, base = (18, 28) if pattern.direction == GREEN else (28, 18)
-            canvas.create_polygon(x + 2, base, x + 11, base, x + 6, tip, fill=outline)
-            canvas.create_text(x + 22, 23, anchor='w', fill=outline, font=('TkDefaultFont', 9, 'bold'),
-                               text=f'{pattern.name}: {DIRECTIONS[pattern.direction]}')
+        if direction:
+            tip, base = (18, 28) if direction == GREEN else (28, 18)
+            canvas.create_polygon(x + 2, y + base, x + 11, y + base, x + 6, y + tip, fill=outline)
+            label = f'{pattern.name}: {DIRECTIONS[direction]}'
+        elif pattern:
+            label = f'{pattern.name}: FORMADO'
+        else:
+            label = ' / '.join(strip_name(item) for item in patterns if not item.direction)
+
+        if label:
+            canvas.create_text(x + 22, y + 23, anchor='w', fill=outline, text=label,
+                               font=('TkDefaultFont', 9, 'bold' if pattern else 'normal'))
 
     def _draw_thermometer(self, y, pattern, formed, entry):
         """Candles do gatilho ja formados, barra de progresso e o que falta."""
@@ -184,14 +222,18 @@ class AssetCard:
                            font=('TkDefaultFont', 8, 'bold'))
 
         # Preenchidos os ja formados; o proximo esperado com contorno tracejado.
+        # Gatilhos longos usam quadrados mais estreitos para caber antes da barra.
+        step  = min(15, THERMO_SQUARES // size)
+        width = min(11, step - 2)
+
         for i, color in enumerate(pattern.trigger):
-            x = 112 + i * 15
+            x = 112 + i * step
             if i < formed:
-                canvas.create_rectangle(x, y + 3, x + 11, y + 15, fill=COLORS[color], outline='')
+                canvas.create_rectangle(x, y + 3, x + width, y + 15, fill=COLORS[color], outline='')
             elif i == formed:
-                canvas.create_rectangle(x, y + 3, x + 11, y + 15, outline=COLORS[color], dash=(2, 2), width=2)
+                canvas.create_rectangle(x, y + 3, x + width, y + 15, outline=COLORS[color], dash=(2, 2), width=2)
             else:
-                canvas.create_rectangle(x, y + 3, x + 11, y + 15, outline='#4a5568')
+                canvas.create_rectangle(x, y + 3, x + width, y + 15, outline='#4a5568')
 
         # Termometro: bulbo + tubo, enchendo com cor mais quente conforme o padrao avanca.
         x0, x1 = 244, 336
@@ -205,9 +247,12 @@ class AssetCard:
         canvas.create_text(x1 + 6, mid, anchor='w', text=f'{fraction:4.0%}',
                            fill=heat if formed else '#8a8f98', font=('TkDefaultFont', 8, 'bold'))
 
-        if done:
+        if done and pattern.direction:
             status = f'FORMADO: {DIRECTIONS[pattern.direction]} {ms_to_datetime(entry).strftime("%H:%M")}'
             color  = COLORS[pattern.direction]
+        elif done:
+            status = f'FORMADO: entrada {ms_to_datetime(entry).strftime("%H:%M")}'
+            color  = HEAT_DONE
         elif formed:
             missing = size - formed
             status  = (f'{formed}/{size} ' + ('falta 1' if missing == 1 else f'faltam {missing}') +
@@ -233,7 +278,7 @@ class IQMonitorApp(MonitorApp):
         self.session      = IQSession()
         self.assets_job   = None
         self.iq_events    = queue.Queue()
-        self.email_var    = tk.StringVar(value=os.environ.get('IQ_EMAIL', ''))
+        self.email_var    = tk.StringVar(value=os.environ.get('IQ_LOGIN') or os.environ.get('IQ_EMAIL', ''))
         self.password_var = tk.StringVar(value=os.environ.get('IQ_PASSWORD', ''))
         self.type_var     = tk.StringVar(value=settings.get('asset_type') if settings.get('asset_type')
                                          in ASSET_TYPES else DEFAULT_ASSET_TYPE)
@@ -243,8 +288,10 @@ class IQMonitorApp(MonitorApp):
             self.saved_assets = self.saved_assets[:max(1, settings['count'])]
         self.resume       = bool(settings.get('searching'))    # retoma a procura apos o login
         self.cards        = []
-        self.detectors    = {}     # ativo da procura -> PatternDetector (todos os ativos, com ou sem cartao)
-        self.asset_status = {}     # ativo da procura -> (texto, erro)
+        self.streams       = {}    # stream_id -> IQMultiStream: o do Tempo escolhido e o de cada tempo fixo
+        self.main_interval = None  # Tempo escolhido ao iniciar a procura
+        self.detectors     = {}    # tempo -> {ativo -> PatternDetector} (todos os ativos, com ou sem cartao)
+        self.asset_status = {}     # ativo da procura -> (texto, erro), do stream do Tempo escolhido
         self.alerts       = []
         self.cards_layout = None
         self.cards_columns = 0
@@ -259,8 +306,7 @@ class IQMonitorApp(MonitorApp):
         if settings.get('interval') in INTERVAL_SECONDS:
             self.interval_var.set(settings['interval'])
 
-        for var, key in ((self.alerts_var, 'alerts'), (self.sound_var, 'sound'),
-                         (self.minutes_var, 'entry_minutes')):
+        for var, key in ((self.alerts_var, 'alerts'), (self.sound_var, 'sound'), (self.minutes_var, 'entry_minutes')):
             if isinstance(settings.get(key), bool):
                 var.set(settings[key])
 
@@ -381,7 +427,11 @@ class IQMonitorApp(MonitorApp):
 
     def _update_cards_title(self):
         self.cards_area.configure(text=f'Ativos na tela ({len(self.cards)})' + (
-            f'  |  procura em {len(self.detectors)} ativos' if self.stream else ''))
+            f'  |  procura em {len(self.stream.assets)} ativos' if self.stream else ''))
+
+    def detector_of(self, name, pattern):
+        """Detector que acompanha o padrao neste ativo (None: ativo fora da procura)."""
+        return self.detectors.get(pattern.interval or self.main_interval, {}).get(name)
 
     def _layout_cards(self, force=False):
         """Distribui os cartoes em tantas colunas quantas couberem."""
@@ -510,17 +560,22 @@ class IQMonitorApp(MonitorApp):
 
     def _sync_stream(self):
         """Com a procura ligada, acompanha os ativos que abriram e deixa os que fecharam."""
-        added   = [name for name in self.symbols if name not in self.detectors]
-        removed = [name for name in self.detectors if name not in self.symbols]
+        watched = self.detectors[self.main_interval]
+        added   = [name for name in self.symbols if name not in watched]
+        removed = [name for name in watched if name not in self.symbols]
 
         for name in removed:
-            self.stream.remove_asset(name)
-            self.detectors.pop(name)
+            for stream in self.streams.values():
+                stream.remove_asset(name)
+                self.detectors[stream.interval].pop(name)
+
             self.asset_status.pop(name, None)
 
         for name in added:
-            self._attach(name, self.stream.interval)
-            self.stream.add_asset(name, self.symbols[name])
+            self._attach(name)
+
+            for stream in self.streams.values():
+                stream.add_asset(name, self.symbols[name])
 
         if added or removed:
             for card in self.cards:
@@ -528,17 +583,30 @@ class IQMonitorApp(MonitorApp):
                     self._show_card_asset(card, card.name)
 
             self._update_cards_title()
-            self.write_log(f'Procura: +{len(added)} / -{len(removed)} ativos (acompanhando {len(self.detectors)})')
+            self.write_log(f'Procura: +{len(added)} / -{len(removed)} ativos (acompanhando {len(watched)})')
 
-    def _attach(self, name, interval):
-        """Inclui o ativo na procura, com um detector novo."""
-        self.detectors[name]    = PatternDetector(self.patterns, interval,
-                                                  use_entry_minutes=self._use_entry_minutes(interval))
+    def _attach(self, name):
+        """Inclui o ativo na procura, com um detector novo em cada tempo acompanhado."""
+        for interval, detectors in self.detectors.items():
+            patterns        = [pattern for pattern in self.patterns
+                               if (pattern.interval or self.main_interval) == interval]
+            detectors[name] = PatternDetector(patterns, interval,
+                                              use_entry_minutes=self._use_entry_minutes(interval))
+
         self.asset_status[name] = ('conectando...', False)
 
-    def _draw_strip(self):
+    def _on_minutes_toggled(self):
+        for interval, detectors in self.detectors.items():
+            for detector in detectors.values():
+                detector.use_entry_minutes = self._use_entry_minutes(interval)
+
+        self._refresh_patterns()
+
         for card in self.cards:
             card.draw()
+
+        self._save_settings()
+        self.write_log('Filtro de minutos ' + ('ligado' if self.minutes_var.get() else 'desligado: qualquer horario'))
 
     # ---------------------------------------------------------------- login
 
@@ -655,18 +723,28 @@ class IQMonitorApp(MonitorApp):
             messagebox.showwarning('IQ Option', 'A lista de ativos ainda nao foi carregada.')
             return
 
-        interval = self.interval_var.get()
+        interval  = self.interval_var.get()
+        intervals = list(dict.fromkeys([interval, *(p.interval for p in self.patterns if p.interval)]))
 
-        self.detectors    = {}
-        self.asset_status = {}
+        self.main_interval = interval
+        self.detectors     = {item: {} for item in intervals}
+        self.asset_status  = {}
         for name in self.symbols:
-            self._attach(name, interval)
+            self._attach(name)
 
         self.close_time = None
+        self.streams    = {}
 
-        self.stream_id += 1
-        self.stream = IQMultiStream(self.stream_id, self.session, self.symbols, interval, self.events)
-        self.stream.start()
+        # Um stream por tempo; padroes de tempo fixo igual ao escolhido usam o mesmo stream.
+        for item in intervals:
+            self.stream_id += 1
+            stream = IQMultiStream(self.stream_id, self.session, self.symbols, item, self.events)
+            self.streams[self.stream_id] = stream
+
+            if item == interval:
+                self.stream = stream
+
+            stream.start()
 
         for card in self.cards:
             self._show_card_asset(card, card.name)
@@ -675,10 +753,20 @@ class IQMonitorApp(MonitorApp):
 
         self.search_button.configure(text='Parar procura')
         self.status_label.configure(text=f'Conectando em {self.stream.name} ({interval})...')
-        self.write_log(f'Procura iniciada em todos os {len(self.symbols)} {self.SYMBOLS_LABEL} ({interval})')
+        self.write_log(f'Procura iniciada em todos os {len(self.symbols)} {self.SYMBOLS_LABEL} '
+                       f'({" + ".join(intervals)})')
         self._save_settings()
 
+    def _stop_fixed_streams(self):
+        """Para os streams de tempo fixo; o do Tempo escolhido e parado pela classe base."""
+        for stream in self.streams.values():
+            if stream is not self.stream:
+                stream.stop()
+
+        self.streams = {}
+
     def stop_search(self):
+        self._stop_fixed_streams()
         super().stop_search()
         self.asset_status = {}
 
@@ -686,17 +774,6 @@ class IQMonitorApp(MonitorApp):
             card.set_status('')
 
         self._update_cards_title()
-
-    def _on_minutes_toggled(self):
-        if self.stream:
-            use_minutes = self._use_entry_minutes(self.stream.interval)
-            for detector in self.detectors.values():
-                detector.use_entry_minutes = use_minutes
-
-        self._refresh_patterns()
-        self._draw_strip()
-        self.write_log('Regra de horario de entrada ' +
-                       ('ligada' if self.minutes_var.get() else 'desligada: qualquer horario'))
 
     # -------------------------------------------------------------- events
 
@@ -709,37 +786,47 @@ class IQMonitorApp(MonitorApp):
                 stream_id, kind, payload = self.events.get_nowait()
 
                 # Ignora eventos de streams antigos (tipo trocado ou procura parada).
-                if self.stream is None or stream_id != self.stream_id:
+                stream = self.streams.get(stream_id)
+                if stream is None:
                     continue
 
+                # A situacao geral e a contagem regressiva sao as do Tempo escolhido.
+                main = stream is self.stream
+
                 if kind == 'status':
-                    self.status_label.configure(text=payload)
+                    if main:
+                        self.status_label.configure(text=payload)
                     self.write_log(payload)
                     continue
 
                 if kind == 'open':
-                    self.close_time = payload['close_time']
+                    if main:
+                        self.close_time = payload['close_time']
                     continue
 
                 name     = payload['name']
-                detector = self.detectors.get(name)
+                detector = self.detectors[stream.interval].get(name)
                 if detector is None:
                     continue
 
                 if kind == 'history':
                     self.time_offset = payload['time_offset']
                     detector.load_history(payload['candles'])
-                    self._log_history_signals(name)
+                    self._log_history_signals(name, detector)
                     changed.add(name)
 
                 elif kind == 'kline':
                     self.time_offset = payload['time_offset']
-                    self._on_asset_candle(name, payload['candle'])
+                    self._on_asset_candle(name, payload['candle'], detector)
                     changed.add(name)
 
                 elif kind == 'revised':
-                    self._on_asset_revised(name, payload['candle'])
+                    self._on_asset_revised(name, payload['candle'], detector)
                     changed.add(name)
+
+                elif kind == 'asset' and not main:
+                    if payload['error'] and self._cards_of(name):
+                        self.write_log(f'{name} ({stream.interval}): {payload["text"]}', 'error')
 
                 elif kind == 'asset':
                     self.asset_status[name] = (payload['text'], payload['error'])
@@ -761,41 +848,40 @@ class IQMonitorApp(MonitorApp):
 
         self.root.after(100, self._process_events)
 
-    def _on_asset_candle(self, name, candle):
+    def _on_asset_candle(self, name, candle, detector):
         # Os resultados (WIN/LOSS) que o detector confere nao sao exibidos: so os padroes formados.
-        signals, _results = self.detectors[name].add_closed_candle(candle)
+        signals, _results = detector.add_closed_candle(candle)
 
         for signal in signals:
-            self._on_asset_signal(name, signal)
+            self._on_asset_signal(name, signal, detector)
 
-    def _on_asset_revised(self, name, candle):
+    def _on_asset_revised(self, name, candle, detector):
         """A IQ Option mudou um candle depois de enviado: troca o candle pela versao final."""
-        old_color, _changed = self.detectors[name].revise(candle)
+        old_color, _changed = detector.revise(candle)
         when                = ms_to_datetime(candle['open_time']).strftime('%H:%M')
 
         if old_color is not None and self._cards_of(name):
             self.write_log(f'{name}: candle {when} corrigido pela IQ Option: {old_color} -> '
                            f'{candle_color(candle)} (a busca dos padroes neste candle usou a cor antiga)', 'error')
 
-    def _log_history_signals(self, name):
+    def _log_history_signals(self, name, detector):
         """Padroes que se formaram antes de o ativo entrar na procura.
 
         Se o candle de entrada ainda esta aberto, ainda da para operar: vira um sinal com alerta (marcado
         com o atraso). Os que ja passaram sao ignorados.
         """
-        detector   = self.detectors[name]
         server_now = time() * 1000 - self.time_offset
 
         for signal, entry_candle in detector.history_signals():
             if entry_candle is None and server_now < signal.entry_open_time + detector.interval_ms:
-                self._on_asset_signal(name, signal)
+                self._on_asset_signal(name, signal, detector)
 
-    def _on_asset_signal(self, name, signal):
+    def _on_asset_signal(self, name, signal, detector):
         """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra.
 
         Vale para qualquer ativo da procura, esteja ele na tela ou nao.
         """
-        interval = self.detectors[name].interval_ms / 1000
+        interval = detector.interval_ms / 1000
         elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
         entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
 
@@ -840,6 +926,7 @@ class IQMonitorApp(MonitorApp):
 
     def on_close(self):
         self._save_settings()
+        self._stop_fixed_streams()
         super().on_close()
         self.session.close()
 

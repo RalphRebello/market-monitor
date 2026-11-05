@@ -14,10 +14,11 @@ histórico, em qual ativo e qual padrão se formou e o horário da entrada. A do
   mostrando o ativo, o padrão e a entrada, e o mesmo texto no histórico;
 - procura em **todos os ativos abertos do tipo** escolhido (binárias, digitais, forex...), com alerta em
   qualquer um deles, esteja ou não na tela;
-- cartões na tela adicionados com o botão **+** e fechados com o **✕**, sem limite, cada um com a faixa de
-  candles (gatilho 1..8 e entrada 9) e o **termômetro dos padrões** (quanto de cada
+- cartões na tela adicionados com o botão **+** e fechados com o **✕**, sem limite, cada um com uma faixa de
+  candles por tamanho de padrão (gatilho e entrada numerados) e o **termômetro dos padrões** (quanto de cada
   gatilho já se formou, quantos candles faltam e o horário previsto da entrada);
-- regra opcional de horário de entrada (minutos final 2/7);
+- filtro de minutos 2/7 nos Padrões 1 a 4, que liga e desliga no painel (só em `1m`); o Padrão 6 tem regra
+  própria e fixa (candle 1 em minuto final 1), e o Padrão 5 vale em qualquer horário;
 - janela responsiva: os cartões se reorganizam em colunas conforme a largura, com rolagem quando não cabem;
 - candles de todos os ativos buscados em lote, numa única conexão, logo após cada fechamento (medido:
   alerta ~1,5 s após o fechamento com 144 ativos de binárias e ~3 s com os 729 de CFD);

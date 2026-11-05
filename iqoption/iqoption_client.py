@@ -193,6 +193,7 @@ class IQSession:
         self.offsets     = deque()             # (hora local, hora local - hora do servidor)
         self.clock_lock  = threading.Lock()
         self.init_data   = None                # ultima lista de binarias/blitz (get_all_init_v2)
+        self.connected_at = 0                  # hora do ultimo login bem-sucedido
 
     @property
     def connected(self):
@@ -207,15 +208,23 @@ class IQSession:
                 self.api = None
                 raise IQOptionError(f'Falha no login: {str(reason)[:300]}')
 
-    def reconnect(self):
+            self.connected_at = time()
+
+    def reconnect(self, after):
+        """Refaz o login, a menos que outro stream ja o tenha refeito depois de after (a mesma queda)."""
         with self.lock:
             if self.api is None:
                 raise IQOptionError('Sessao nao iniciada')
+
+            if self.connected_at > after and self.connected:
+                return
 
             check, reason = run_with_timeout(self.api.connect, CONNECT_TIMEOUT)
 
             if not check:
                 raise IQOptionError(f'Falha ao reconectar: {str(reason)[:300]}')
+
+            self.connected_at = time()
 
     def close(self):
         if self.api is not None:
@@ -564,12 +573,13 @@ class IQMultiStream(threading.Thread):
         online       = False
         current_open = None
         reconnect    = False    # apos uma falha, reconecta mesmo que o websocket pareca aberto
+        failed_at    = 0
 
         while not self._stop_event.is_set():
             try:
                 if reconnect or not self.session.connected:
                     self.emit('status', 'Reconectando na IQ Option...')
-                    self.session.reconnect()
+                    self.session.reconnect(failed_at if reconnect else time())
                     reconnect = False
 
                 self._apply_commands()
@@ -595,6 +605,7 @@ class IQMultiStream(threading.Thread):
                     break
 
                 online, reconnect = False, True
+                failed_at         = time()
                 self.emit('status', f'Conexao perdida ({error}). Reconectando em {backoff}s...')
                 self._stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)

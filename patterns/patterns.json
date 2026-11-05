@@ -1,36 +1,64 @@
 {
-    "_doc": [
-        "candles: sequencia de 9 cores (G = verde/alta, R = vermelho/baixa) lida da esquerda para a direita.",
-        "Os 8 primeiros candles sao o gatilho; o 9o e a entrada: G = COMPRA (CALL), R = VENDA (PUT).",
-        "entry_minutes: ultimo digito do minuto de abertura do candle de entrada (9o).",
-        "As marcacoes 2/7 (candle 4) e 7/2 (candle 9) significam que a entrada ocorre em minutos terminados em 2 ou 7.",
-        "Deixe entry_minutes vazio ([]) para aceitar qualquer horario."
-    ],
-    "interval": "1m",
-    "patterns": [
-        {
-            "name": "Padrao 1 - CALL",
-            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM.jpeg",
-            "candles": "R G G R R R G R G",
-            "entry_minutes": [2, 7]
-        },
-        {
-            "name": "Padrao 2 - PUT",
-            "image": "WhatsApp Image 2026-09-25 at 9.57.39 AM (1).jpeg",
-            "candles": "G R R G G G R G R",
-            "entry_minutes": [2, 7]
-        },
-        {
-            "name": "Padrao 3 - CALL",
-            "image": "WhatsApp Image 2026-09-25 at 9.57.40 AM.jpeg",
-            "candles": "G R R G R R G R G",
-            "entry_minutes": [2, 7]
-        },
-        {
-            "name": "Padrao 4 - PUT",
-            "image": "WhatsApp Image 2026-09-25 at 9.57.40 AM (1).jpeg",
-            "candles": "R G G R G G R G R",
-            "entry_minutes": [2, 7]
-        }
-    ]
+  "_doc": [
+    "candles: sequencia de cores (G = verde/alta, R = vermelho/baixa) lida da esquerda para a direita.",
+    "Por padrao, o ultimo candle e a entrada: G = COMPRA (CALL), R = VENDA (PUT); os anteriores sao o gatilho.",
+    "alert_only: true = todos os candles sao o gatilho, sem direcao; o alerta sai no candle seguinte ao ultimo.",
+    "entry_minutes: ultimo digito do minuto de abertura do candle de entrada (o candle do alerta).",
+    "Deixe entry_minutes vazio ([]) para aceitar qualquer horario: e o caso do Padrao 5.",
+    "minutes_candle: candle marcado na imagem, usado so para mostrar a regra no painel (padrao: candle 1).",
+    "minutes_optional: true = a regra pode ser ligada e desligada no monitor (filtro de minutos).",
+    "Padroes 1 a 4: candle 4 em 2/7 e candle 9 (entrada) em 7/2, 5 minutos depois: [7, 2], so em 1m.",
+    "interval dentro de um padrao: tempo fixo dele, independente do Tempo escolhido no monitor.",
+    "Padrao 6: sempre em 1m; o candle 1 abre em final 1, logo o candle 8 abre em final 8: [8]."
+  ],
+  "interval": "1m",
+  "patterns": [
+    {
+      "name": "Padrao 1",
+      "image": "pattern_1.jpeg",
+      "candles": "R G G R R R G R G",
+      "entry_minutes": [7, 2],
+      "minutes_candle": 4,
+      "minutes_optional": true
+    },
+    {
+      "name": "Padrao 2",
+      "image": "pattern_2.jpeg",
+      "candles": "G R R G G G R G R",
+      "entry_minutes": [7, 2],
+      "minutes_candle": 4,
+      "minutes_optional": true
+    },
+    {
+      "name": "Padrao 3",
+      "image": "pattern_3.jpeg",
+      "candles": "G R R G R R G R G",
+      "entry_minutes": [7, 2],
+      "minutes_candle": 4,
+      "minutes_optional": true
+    },
+    {
+      "name": "Padrao 4",
+      "image": "pattern_4.jpeg",
+      "candles": "R G G R G G R G R",
+      "entry_minutes": [7, 2],
+      "minutes_candle": 4,
+      "minutes_optional": true
+    },
+    {
+      "name": "Padrao 5",
+      "image": "pattern_5.jpeg",
+      "candles": "R G G R R R G R G G R R",
+      "alert_only": true,
+      "entry_minutes": []
+    },
+    {
+      "name": "Padrao 6",
+      "image": "pattern_6.jpeg",
+      "candles": "R G G R R R G",
+      "interval": "1m",
+      "alert_only": true,
+      "entry_minutes": [8]
+    }
+  ]
 }

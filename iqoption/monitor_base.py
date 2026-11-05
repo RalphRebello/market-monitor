@@ -12,9 +12,6 @@ from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, PATTERN
 ALERT_SECONDS  = 30
 STRIP_CANDLES  = 16
 
-# Regra de horario de entrada (entry_minutes do patterns.json, ex.: 2/7) ligada ao abrir.
-DEFAULT_ENTRY_MINUTES = False
-
 COLORS = {
     GREEN : '#26a65b',
     RED   : '#e5262d',
@@ -46,7 +43,7 @@ class MonitorApp:
         self.root.title('Monitor de Padroes - Opcoes Binarias')
         self.root.geometry('900x620')
 
-        # O intervalo do JSON e o padrao e o unico em que entry_minutes (regra 2/7) se aplica.
+        # O intervalo do JSON e o padrao e o unico em que o filtro de minutos se aplica.
         self.patterns_interval, self.patterns = load_patterns(PATTERNS_FILE)
 
         self.events      = queue.Queue()
@@ -58,9 +55,9 @@ class MonitorApp:
         self.close_time  = None
 
         self.interval_var = tk.StringVar(value=self.patterns_interval)
+        self.minutes_var  = tk.BooleanVar(value=True)
         self.alerts_var   = tk.BooleanVar(value=True)
         self.sound_var    = tk.BooleanVar(value=True)
-        self.minutes_var  = tk.BooleanVar(value=DEFAULT_ENTRY_MINUTES)
 
         self._build_ui()
         self._load_symbols()
@@ -104,11 +101,13 @@ class MonitorApp:
         self.patterns_frame = ttk.LabelFrame(self.root, text='Padroes carregados', padding=6)
         self.patterns_frame.pack(fill='x', padx=10)
 
-        minutes = sorted({m for pattern in self.patterns for m in pattern.entry_minutes})
-        if minutes:
+        optional = [pattern for pattern in self.patterns if pattern.minutes_optional]
+        if optional:
+            minutes = '/'.join(str(m) for m in sorted({m for pattern in optional
+                                                       for m in pattern.entry_minutes}))
+            names   = ', '.join(pattern_title(pattern.name) for pattern in optional)
             ttk.Checkbutton(self.patterns_frame, variable=self.minutes_var,
-                            text=f'Exigir horario de entrada (minutos final '
-                                 f'{"/".join(str(m) for m in minutes)}, so em {self.patterns_interval})',
+                            text=f'Filtro de minutos {minutes} (so em {self.patterns_interval}): {names}',
                             command=self._on_minutes_toggled).pack(anchor='w', pady=(0, 4))
 
         self.pattern_labels = [ttk.Label(self.patterns_frame) for _ in self.patterns]
@@ -133,28 +132,40 @@ class MonitorApp:
         self.log.configure(state='disabled')
 
     def _use_entry_minutes(self, interval):
-        """A regra de horario (entry_minutes) so vale se estiver ligada e no tempo do patterns.json."""
+        """O filtro de minutos (minutes_optional) so vale se estiver ligado e no tempo do patterns.json."""
         return self.minutes_var.get() and interval == self.patterns_interval
 
+    def _minutes_rule(self, pattern):
+        """Texto da regra pelos candles marcados: 'candle 4 em minutos final 2/7 e candle 9 em final 7/2'."""
+        entry  = len(pattern.trigger) + 1
+        before = entry - pattern.minutes_candle
+        marked = '/'.join(str((m - before) % 10) for m in pattern.entry_minutes)
+        last   = '/'.join(str(m) for m in pattern.entry_minutes)
+
+        return f'candle {pattern.minutes_candle} em minutos final {marked} e candle {entry} em final {last}'
+
     def _refresh_patterns(self):
-        interval      = self.interval_var.get()
-        check_minutes = self._use_entry_minutes(interval)
+        interval = self.interval_var.get()
 
         self.patterns_frame.configure(text=f'Padroes carregados ({interval})')
 
         for pattern, label in zip(self.patterns, self.pattern_labels):
             if not pattern.entry_minutes:
                 timing = 'entrada em qualquer horario'
-            elif check_minutes:
-                minutes = '/'.join(str(m) for m in pattern.entry_minutes)
-                timing  = f'entrada em minutos final {minutes}'
+            elif not pattern.minutes_optional or self._use_entry_minutes(interval):
+                timing = self._minutes_rule(pattern)
             elif not self.minutes_var.get():
-                timing = 'entrada em qualquer horario (regra de horario desligada)'
+                timing = 'entrada em qualquer horario (filtro de minutos desligado)'
             else:
                 timing = f'horario ignorado (regra so vale em {self.patterns_interval})'
 
-            label.configure(text=f'{pattern.name}:  {" ".join(pattern.trigger)}  ->  '
-                                 f'{DIRECTIONS[pattern.direction]}  |  {timing}')
+            target = (DIRECTIONS[pattern.direction] if pattern.direction
+                      else f'alerta no candle {len(pattern.trigger) + 1}')
+
+            if pattern.interval:
+                timing = f'sempre em {pattern.interval}  |  {timing}'
+
+            label.configure(text=f'{pattern.name}:  {" ".join(pattern.trigger)}  ->  {target}  |  {timing}')
 
     # ------------------------------------------------------------- symbols
 

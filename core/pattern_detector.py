@@ -61,8 +61,11 @@ def candle_color(candle):
 class Pattern:
     name          : str
     trigger       : str          # cores dos candles de gatilho, ex.: 'RGGRRRGR'
-    direction     : str          # cor do candle de entrada (G ou R)
+    direction     : str          # cor do candle de entrada (G ou R); None = so alerta, sem direcao
     entry_minutes : tuple = ()   # ultimo digito do minuto de abertura da entrada
+    interval      : str   = None # tempo fixo do padrao; None = o tempo escolhido no monitor
+    minutes_candle   : int  = 1      # candle cuja marcacao de minuto o painel mostra
+    minutes_optional : bool = False  # True: entry_minutes obedece a use_entry_minutes do detector
 
     def matches_time(self, entry_open_time):
         if not self.entry_minutes:
@@ -113,10 +116,23 @@ def load_patterns(path):
         if len(candles) < 2 or set(candles) - {GREEN, RED}:
             raise PatternError(f"Sequencia invalida em '{item['name']}': {item['candles']}")
 
+        alert_only = item.get('alert_only', False)
+        fixed      = item.get('interval')
+        marked     = item.get('minutes_candle', 1)
+
+        if fixed is not None and fixed not in INTERVAL_MS:
+            raise PatternError(f"Intervalo nao suportado em '{item['name']}': {fixed}")
+
+        if not 1 <= marked <= (len(candles) + 1 if alert_only else len(candles)):
+            raise PatternError(f"minutes_candle fora da sequencia em '{item['name']}': {marked}")
+
         patterns.append(Pattern(name          = item['name'],
-                                trigger       = candles[:-1],
-                                direction     = candles[-1],
+                                trigger       = candles if alert_only else candles[:-1],
+                                direction     = None if alert_only else candles[-1],
                                 entry_minutes = tuple(item.get('entry_minutes', ())),
+                                interval      = fixed,
+                                minutes_candle   = marked,
+                                minutes_optional = item.get('minutes_optional', False),
                                 ))
 
     if not patterns:
@@ -126,7 +142,10 @@ def load_patterns(path):
 
 
 class PatternDetector:
-    """Guarda os candles fechados e procura os padroes a cada novo fechamento."""
+    """Guarda os candles fechados e procura os padroes a cada novo fechamento.
+
+    use_entry_minutes liga o filtro dos padroes com minutes_optional; os demais seguem sempre entry_minutes.
+    """
 
     def __init__(self, patterns, interval='1m', use_entry_minutes=True, max_candles=200):
         self.patterns          = patterns
@@ -172,7 +191,8 @@ class PatternDetector:
         results = self._resolve_pending(candle)
         signals = self._find_signals(candle['open_time'] + self.interval_ms)
 
-        self.pending.extend(signals)
+        # Sem direcao nao ha WIN/LOSS a conferir.
+        self.pending.extend(signal for signal in signals if signal.direction)
 
         return signals, results
 
@@ -241,15 +261,15 @@ class PatternDetector:
         entry_open_time = max(self.candles) + self.interval_ms
 
         return [pattern for pattern in self.patterns
-                if (not self.use_entry_minutes or pattern.matches_time(entry_open_time))
+                if self._time_ok(pattern, entry_open_time)
                 and self.last_colors(len(pattern.trigger)) == pattern.trigger]
 
     def pattern_progress(self):
         """Quanto de cada gatilho ja se formou: [(padrao, candles_formados, entrada_prevista)].
 
         candles_formados e o maior k em que os ultimos k candles fechados repetem os k primeiros do
-        gatilho; se ele continuar formando, a entrada sera em entrada_prevista (open_time). Com a regra
-        de horario ligada, so conta o k cuja entrada prevista cai num minuto aceito pelo padrao.
+        gatilho; se ele continuar formando, a entrada sera em entrada_prevista (open_time). Com regra
+        de horario valendo no padrao, so conta o k cuja entrada prevista cai num minuto aceito.
         """
         if not self.candles:
             return [(pattern, 0, None) for pattern in self.patterns]
@@ -266,13 +286,19 @@ class PatternDetector:
                 if formed and self.last_colors(formed) != pattern.trigger[:formed]:
                     continue
 
-                if formed and self.use_entry_minutes and not pattern.matches_time(entry_open_time):
+                if formed and not self._time_ok(pattern, entry_open_time):
                     continue
 
                 progress.append((pattern, formed, entry_open_time if formed else None))
                 break
 
         return progress
+
+    def _time_ok(self, pattern, entry_open_time):
+        if pattern.minutes_optional and not self.use_entry_minutes:
+            return True
+
+        return pattern.matches_time(entry_open_time)
 
     def _find_signals(self, entry_open_time):
         signals = []
@@ -283,7 +309,7 @@ class PatternDetector:
             if key in self.signaled:
                 continue
 
-            if self.use_entry_minutes and not pattern.matches_time(entry_open_time):
+            if not self._time_ok(pattern, entry_open_time):
                 continue
 
             trigger_end = entry_open_time - self.interval_ms
