@@ -58,6 +58,7 @@ class MonitorApp:
         self.minutes_var  = tk.BooleanVar(value=True)
         self.alerts_var   = tk.BooleanVar(value=True)
         self.sound_var    = tk.BooleanVar(value=True)
+        self.pattern_vars = {pattern.name: tk.BooleanVar(value=True) for pattern in self.patterns}
 
         self._build_ui()
         self._load_symbols()
@@ -110,7 +111,10 @@ class MonitorApp:
                             text=f'Filtro de minutos {minutes} (so em {self.patterns_interval}): {names}',
                             command=self._on_minutes_toggled).pack(anchor='w', pady=(0, 4))
 
-        self.pattern_labels = [ttk.Label(self.patterns_frame) for _ in self.patterns]
+        # Uma caixa por padrao: desmarcado, o padrao nao aparece nos cartoes nem gera alerta.
+        self.pattern_labels = [ttk.Checkbutton(self.patterns_frame, variable=self.pattern_vars[pattern.name],
+                                               command=lambda pattern=pattern: self._on_pattern_toggled(pattern))
+                               for pattern in self.patterns]
         for label in self.pattern_labels:
             label.pack(anchor='w')
 
@@ -130,6 +134,17 @@ class MonitorApp:
         self.log.insert('end', f'[{now}] {text}\n', tag)
         self.log.see('end')
         self.log.configure(state='disabled')
+
+    @property
+    def active_patterns(self):
+        """Padroes ligados nas caixas de Padroes carregados."""
+        return [pattern for pattern in self.patterns if self.pattern_vars[pattern.name].get()]
+
+    def is_active(self, pattern):
+        return self.pattern_vars[pattern.name].get()
+
+    def _on_pattern_toggled(self, pattern):
+        self.write_log(f'{pattern_title(pattern.name)} ' + ('ativado' if self.is_active(pattern) else 'desativado'))
 
     def _use_entry_minutes(self, interval):
         """O filtro de minutos (minutes_optional) so vale se estiver ligado e no tempo do patterns.json."""

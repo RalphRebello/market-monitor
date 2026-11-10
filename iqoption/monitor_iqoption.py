@@ -103,12 +103,7 @@ class AssetCard:
         self.status_label = ttk.Label(head, foreground='#8a8f98')
         self.status_label.pack(side='left', fill='x', expand=True)
 
-        # Um grupo por tamanho de gatilho e tempo: faixa de candles, termometros desses padroes e separador.
-        self.groups = list(dict.fromkeys(pattern_group(pattern) for pattern in app.patterns))
-        height      = (len(self.groups) * CARD_STRIP + (len(self.groups) - 1) * CARD_GAP +
-                       len(app.patterns) * THERMO_ROW + 2)
-
-        self.canvas = tk.Canvas(body, height=height, background=CARD_BG, highlightthickness=0)
+        self.canvas = tk.Canvas(body, height=1, background=CARD_BG, highlightthickness=0)
         self.canvas.pack(fill='x')
 
         self.draw()
@@ -127,7 +122,16 @@ class AssetCard:
         canvas = self.canvas
         canvas.delete('all')
 
-        patterns  = self.app.patterns
+        # So os padroes ativos; um grupo por tamanho de gatilho e tempo: faixa de candles, termometros
+        # desses padroes e separador.
+        patterns  = self.app.active_patterns
+        groups    = list(dict.fromkeys(pattern_group(pattern) for pattern in patterns))
+        height    = (len(groups) * CARD_STRIP + max(0, len(groups) - 1) * CARD_GAP +
+                     len(patterns) * THERMO_ROW + 2) if patterns else CARD_STRIP
+
+        if int(canvas.cget('height')) != height:
+            canvas.configure(height=height)
+
         detectors = {self.app.detector_of(self.name, pattern) for pattern in patterns} - {None}
         rows      = {row[0]: row for detector in detectors for row in detector.pattern_progress()}
         progress  = [rows.get(pattern, (pattern, 0, None)) for pattern in patterns]
@@ -135,8 +139,12 @@ class AssetCard:
 
         self.frame.configure(background=CARD_FORMED if any_done else CARD_BORDER)
 
+        if not patterns:
+            canvas.create_text(8, 18, anchor='w', fill='#8a8f98', text='Nenhum padrao ativo')
+            return
+
         y = 0
-        for group in self.groups:
+        for group in groups:
             if y:
                 # A largura real do canvas acompanha a janela; o excesso da linha fica cortado.
                 canvas.create_line(0, y + 2, 4000, y + 2, fill=SEPARATOR, width=2)
@@ -311,11 +319,17 @@ class IQMonitorApp(MonitorApp):
             if isinstance(settings.get(key), bool):
                 var.set(settings[key])
 
+        disabled = settings.get('disabled_patterns')
+        if isinstance(disabled, list):
+            for name, var in self.pattern_vars.items():
+                var.set(name not in disabled)
+
         self.interval_box['values'] = list(INTERVAL_SECONDS)
         if self.interval_var.get() not in INTERVAL_SECONDS:
             self.interval_var.set('1m')
 
         self._refresh_patterns()
+        self._redraw_cards()
 
         if self.saved_assets:
             self.write_log(f'Restaurados {len(self.cards)} cartao(oes) de {SETTINGS_FILE}' +
@@ -635,6 +649,19 @@ class IQMonitorApp(MonitorApp):
         self._save_settings()
         self.write_log('Filtro de minutos ' + ('ligado' if self.minutes_var.get() else 'desligado: qualquer horario'))
 
+    def _on_pattern_toggled(self, pattern):
+        """Liga/desliga um padrao: some dos cartoes e deixa de gerar alerta, sem reiniciar a procura."""
+        super()._on_pattern_toggled(pattern)
+        self._redraw_cards()
+        self._save_settings()
+
+    def _redraw_cards(self):
+        """Redesenha os cartoes; a altura deles muda com o numero de padroes ativos."""
+        for card in self.cards:
+            card.draw()
+
+        self._fit_cards_height()
+
     # ---------------------------------------------------------------- login
 
     def login(self):
@@ -906,8 +933,11 @@ class IQMonitorApp(MonitorApp):
     def _on_asset_signal(self, name, signal, detector):
         """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra.
 
-        Vale para qualquer ativo da procura, esteja ele na tela ou nao.
+        Vale para qualquer ativo da procura, esteja ele na tela ou nao. Padrao desativado: nada.
         """
+        if not self.is_active(signal.pattern):
+            return
+
         interval = detector.interval_ms / 1000
         elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
         entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
@@ -942,6 +972,7 @@ class IQMonitorApp(MonitorApp):
             'alerts'        : self.alerts_var.get(),
             'sound'         : self.sound_var.get(),
             'entry_minutes' : self.minutes_var.get(),
+            'disabled_patterns' : [name for name, var in self.pattern_vars.items() if not var.get()],
             'searching'     : self.stream is not None,
             'geometry'      : self.root.geometry(),
         }

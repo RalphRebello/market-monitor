@@ -74,6 +74,7 @@ Os demais controles:
 
 | Controle | O que faz |
 |---|---|
+| **Caixa de cada padrão** | Em **Padrões carregados**, cada padrão tem uma caixa, e todas vêm marcadas. Desmarcada, o padrão some dos cartões (a altura deles diminui) e não gera popup nem linha no histórico; marcada de novo, volta a valer a partir do próximo candle. Pode ser trocada com a procura ligada, sem reiniciá-la, e a escolha fica salva. Sem nenhum padrão marcado, os cartões mostram `Nenhum padrao ativo`. |
 | **Filtro de minutos 2/7** | Fica em **Padrões carregados** e vem ligado. Ligado: em `1m`, os Padrões 1 a 4 só valem com o candle 4 em minuto final 2 ou 7 (candle 9 em 7 ou 2). Desligado: valem em qualquer horário. Pode ser trocado com a procura ligada, sem reiniciá-la, e a escolha fica salva. Não afeta os Padrões 5 e 6. |
 | **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Clicar no popup, fora do botão **Fechar alerta**, fecha-o, traz o monitor para a frente e abre o card do ativo; se o card já existir, mostra o que está aberto. Desligado: o sinal só aparece no histórico. |
 | **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
@@ -101,7 +102,7 @@ candle é trocado pela versão final. Se a cor mudou num ativo da tela, o histó
 
 Ao fechar a janela, ao iniciar uma procura e ao adicionar, fechar ou trocar um cartão, o monitor grava em
 `~/.config/monitor_padroes/iqoption.json` o **Tipo**, os ativos dos cartões na tela, o **Tempo**,
-as opções **Alertas ativos** e **Som**, o tamanho da janela e se a procura
+as opções **Alertas ativos** e **Som**, os padrões ligados e desligados, o tamanho da janela e se a procura
 estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N cartao(oes)`.
 
 - **E-mail e senha não são gravados.** Continue usando `IQ_LOGIN`/`IQ_PASSWORD` se não quiser digitá-los (`IQ_EMAIL` também é aceito no lugar de `IQ_LOGIN`).
