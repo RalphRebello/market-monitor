@@ -102,7 +102,7 @@ candle é trocado pela versão final. Se a cor mudou num ativo da tela, o histó
 
 Ao fechar a janela, ao iniciar uma procura e ao adicionar, fechar ou trocar um cartão, o monitor grava em
 `~/.config/monitor_padroes/iqoption.json` o **Tipo**, os ativos dos cartões na tela, o **Tempo**,
-as opções **Alertas ativos** e **Som**, os padrões ligados e desligados, o tamanho da janela e se a procura
+as opções **Alertas ativos** e **Som**, os padrões e sequências ligados e desligados, o tamanho da janela e se a procura
 estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N cartao(oes)`.
 
 - **E-mail e senha não são gravados.** Continue usando `IQ_LOGIN`/`IQ_PASSWORD` se não quiser digitá-los (`IQ_EMAIL` também é aceito no lugar de `IQ_LOGIN`).
@@ -149,6 +149,34 @@ Conta o maior trecho final dos candles fechados que repete o início do gatilho
 trecho que ainda serve (às vezes 0). Com regra de minuto valendo (Padrão 6 sempre; Padrões 1 a 4 com o filtro
 ligado, em `1m`), só conta se a entrada prevista cair no minuto aceito; senão ele fica em 0%. O termômetro usa só candles fechados (a
 IQ Option não envia o preço do candle em andamento).
+
+### Sequência Padrão 5 → Padrão 1
+
+Além dos alertas de cada padrão, o monitor acompanha uma **sequência** em cada ativo da procura:
+
+1. Quando o **Padrão 5** se forma no ativo, a sequência fica **armada** nele. O histórico registra
+   `X | Sequencia Padrao 5 -> Padrao 1: Padrao 5 formado, aguardando Padrao 1`.
+2. Quando o **Padrão 1** se forma depois disso **no mesmo ativo**, sai um **popup amarelo**
+   (`Sequencia Padrao 5 -> Padrao 1`), e o histórico mostra a mesma linha em amarelo. A sequência **zera** e
+   volta a esperar um novo Padrão 5.
+
+Regras:
+
+- Nenhuma vela do Padrão 5 conta para o Padrão 1. A vela 13 (a do alerta do Padrão 5) pode ser a primeira do
+  Padrão 1.
+- O Padrão 1 da sequência obedece ao **Filtro de minutos 2/7**, como o Padrão 1 normal.
+- A espera não expira. Um novo Padrão 5 antes do Padrão 1 reinicia a espera a partir dele.
+- Os alertas verdes dos Padrões 5 e 1 continuam saindo normalmente. O amarelo é um aviso a mais.
+- A sequência tem caixa própria em **Padrões carregados** e funciona mesmo com as caixas dos Padrões 5 e 1
+  desmarcadas (assim dá para receber só o alerta amarelo). Desmarcar ou marcar a caixa zera a sequência.
+- Cada cartão mostra, abaixo dos termômetros, se a sequência daquele ativo está `aguardando Padrao 5` ou
+  `Padrao 5 formado (alerta HH:MM), aguardando Padrao 1`.
+- Parar a procura, iniciá-la de novo ou fechar o programa zera todas as sequências.
+- Como os 9 primeiros candles do Padrão 5 são o próprio Padrão 1, um segundo Padrão 5 que comece depois do
+  primeiro já completa a sequência no meio do caminho (com o filtro de minutos, só se a entrada cair em 7/2).
+
+A sequência é definida em `sequences` no `patterns/patterns.json` (`first` arma e `then` completa), e outras
+podem ser adicionadas ali.
 
 ## Padrões
 
