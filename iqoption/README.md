@@ -244,6 +244,9 @@ No JSON, as regras ficam em `entry_minutes`, que vale para o **minuto de abertur
             "minutes_candle": 4,
             "minutes_optional": true
         }
+    ],
+    "sequences": [
+        {"name": "Padrao 5 -> Padrao 1", "first": "Padrao 5", "then": "Padrao 1"}
     ]
 }
 ```
@@ -259,6 +262,7 @@ No JSON, as regras ficam em `entry_minutes`, que vale para o **minuto de abertur
 | `minutes_candle` | não (padrão `1`) | Candle marcado na imagem. Só muda o texto da regra no painel, como `candle 4 em minutos final 2/7 e candle 9 em final 7/2`. |
 | `minutes_optional` | não (padrão `false`) | `true`: a regra obedece ao **Filtro de minutos** do painel. `false`: `entry_minutes` vale sempre. |
 | `image` | não | Só referência para a imagem de origem; o programa não lê o arquivo. |
+| `sequences` | não | Lista de sequências (ver [Sequência Padrão 5 → Padrão 1](#sequência-padrão-5--padrão-1)). Cada uma tem `name` (nome no painel, no cartão e no popup amarelo), `first` (padrão que arma) e `then` (padrão que completa), com os nomes exatos de `patterns`. Nome inexistente ou o mesmo padrão nos dois impede o monitor de abrir, com uma mensagem. |
 
 Para **adicionar um padrão**, inclua uma nova entrada em `patterns` e reinicie o monitor. Se o arquivo tiver
 erro (letra inválida, JSON malformado), o monitor mostra uma mensagem e não abre.
@@ -326,6 +330,7 @@ market-monitor/
 │   └── README.md                 # este documento
 │
 ├── core/pattern_detector.py      # detecção dos padrões (sem interface)
+├── core/sequences.py             # sequências de padrões por ativo (sem interface)
 ├── patterns/patterns.json        # padrões + imagens de referência
 └── windows/                      # build do executável para Windows
 ```
@@ -455,7 +460,11 @@ desenha o detector do seu ativo.
 | `_sync_stream` / `_attach` | a cada atualização da lista, inclui no stream os ativos que abriram e tira os que fecharam |
 | `_log_history_signals` | padrão do histórico com a entrada ainda aberta vira sinal com alerta; os que já passaram são ignorados |
 | `_process_events` | eventos por ativo; os cartões dos ativos alterados são redesenhados uma vez por rodada |
-| `_on_asset_signal` | sinal de qualquer ativo da procura (na tela ou não), com o nome do ativo e o atraso; no histórico, o mesmo texto do popup; entrada já fechada vira `Padrao perdido`; alertas em cascata |
+| `_on_asset_signal` | sinal de qualquer ativo da procura (na tela ou não): passa pelo `SequenceTracker` (mesmo com o padrão desmarcado) e, se o padrão estiver marcado, vai para `_alert_pattern` |
+| `_alert_pattern` / `_popup` | alerta verde com o nome do ativo e o atraso; no histórico, o mesmo texto do popup; entrada já fechada vira `Padrao perdido`; alertas em cascata |
+| `_on_sequence_event` | sequência armada (só histórico) ou completada (popup e linha amarelos); entrada já fechada vira `Sequencia perdida` |
+| `_on_pattern_toggled` / `_on_sequence_toggled` / `_redraw_cards` | caixas de **Padrões carregados**: redesenham os cartões (a altura muda) e salvam a escolha; a da sequência também a zera |
+| `AssetCard._draw_sequence` | linha `Sequencia ... \| Aguardando ...` do cartão, cinza ou amarela |
 | `_on_asset_revised` | aplica um candle corrigido pela IQ Option e avisa se a cor mudou |
 | `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`, em `settings.py`) |
 | `on_close` | salva as escolhas e também fecha a sessão da IQ Option |

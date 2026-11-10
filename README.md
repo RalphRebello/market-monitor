@@ -18,6 +18,9 @@ histórico, em qual ativo e qual padrão se formou e o horário da entrada. A do
   candles por tamanho de padrão (gatilho e entrada numerados) e o **termômetro dos padrões** (quanto de cada
   gatilho já se formou, quantos candles faltam e o horário previsto da entrada);
 - clique no popup para abrir o card do ativo que alertou;
+- caixa para ligar e desligar cada padrão no painel **Padrões carregados**, sem reiniciar a procura;
+- **sequência Padrão 5 → Padrão 1**: depois de um Padrão 5, o Padrão 1 no mesmo ativo gera um popup
+  **amarelo** e a sequência zera; o cartão mostra `Aguardando Padrao 5` / `Aguardando Padrao 1`;
 - filtro de minutos 2/7 nos Padrões 1 a 4, que liga e desliga no painel (só em `1m`); o Padrão 6 tem regra
   própria e fixa (candle 1 em minuto final 1), e o Padrão 5 vale em qualquer horário;
 - janela responsiva: os cartões se reorganizam em colunas conforme a largura, com rolagem quando não cabem;
@@ -27,7 +30,7 @@ histórico, em qual ativo e qual padrão se formou e o horário da entrada. A do
 - alerta também para padrão já formado cuja entrada ainda está aberta ao iniciar a procura
   (`entrada ... (atrasado Ns, fecha em Ns)`); os que já passaram são ignorados;
 - reconexão automática, inclusive quando a conexão para de responder sem fechar;
-- escolhas (tipo, ativos, tempo, opções, tamanho da janela) salvas em `~/.config/monitor_padroes/` e
+- escolhas (tipo, ativos, tempo, opções, padrões e sequências ligados, tamanho da janela) salvas em `~/.config/monitor_padroes/` e
   procura retomada após o login; e-mail e senha nunca são gravados;
 - backtest dos padrões com os candles da IQ Option (`python -m iqoption.backtest`);
 - executável único para Windows, gerado a partir do Linux (`windows/build.sh`).
@@ -37,7 +40,7 @@ histórico, em qual ativo e qual padrão se formou e o horário da entrada. A do
 ```
 market-monitor/
 ├── iqoption/           # monitor (GUI, cliente da IQ Option, backtest, requirements)
-├── core/               # detecção dos padrões (sem interface)
+├── core/               # detecção dos padrões e sequências (sem interface)
 ├── patterns/           # patterns.json + imagens de referência
 └── windows/            # build do executável para Windows
 ```
