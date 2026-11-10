@@ -169,8 +169,9 @@ Regras:
 - Os alertas verdes dos Padrões 5 e 1 continuam saindo normalmente. O amarelo é um aviso a mais.
 - A sequência tem caixa própria em **Padrões carregados** e funciona mesmo com as caixas dos Padrões 5 e 1
   desmarcadas (assim dá para receber só o alerta amarelo). Desmarcar ou marcar a caixa zera a sequência.
-- Cada cartão mostra, abaixo dos termômetros, se a sequência daquele ativo está `aguardando Padrao 5` ou
-  `Padrao 5 formado (alerta HH:MM), aguardando Padrao 1`.
+- Cada cartão mostra, abaixo dos termômetros, a linha `Sequencia Padrao 5 -> Padrao 1 | Aguardando Padrao 5`
+  em cinza. Depois do Padrão 5, o final muda para `| Aguardando Padrao 1` e a linha fica amarela até o alerta
+  amarelo sair; aí volta para `Aguardando Padrao 5`.
 - Parar a procura, iniciá-la de novo ou fechar o programa zera todas as sequências.
 - Como os 9 primeiros candles do Padrão 5 são o próprio Padrão 1, um segundo Padrão 5 que comece depois do
   primeiro já completa a sequência no meio do caminho (com o filtro de minutos, só se a entrada cair em 7/2).

@@ -179,18 +179,12 @@ class AssetCard:
         """Situacao da sequencia neste ativo: aguardando o primeiro padrao ou armada aguardando o segundo."""
         armed = self.app.tracker.armed_at(sequence, self.name) if self.name else None
 
-        if armed is None:
-            status = f'aguardando {sequence.first}'
-            color  = '#8a8f98'
-        else:
-            status = (f'{sequence.first} formado (alerta {ms_to_datetime(armed).strftime("%H:%M")}), '
-                      f'aguardando {sequence.then}')
-            color  = SEQUENCE_COLOR
+        # Aguardando o primeiro: cinza. Armada, aguardando o segundo: amarelo, como o popup que vira.
+        waiting = sequence.first if armed is None else sequence.then
+        color   = '#8a8f98' if armed is None else SEQUENCE_COLOR
 
-        self.canvas.create_text(6, y + 9, anchor='w', text=f'Sequencia {sequence.name}:', fill=SEQUENCE_COLOR,
-                                font=('TkDefaultFont', 8, 'bold'))
-        self.canvas.create_text(170, y + 9, anchor='w', text=status, fill=color,
-                                font=('TkDefaultFont', 8, 'bold' if armed is not None else 'normal'))
+        self.canvas.create_text(6, y + 9, anchor='w', text=f'Sequencia {sequence.name} | Aguardando {waiting}',
+                                fill=color, font=('TkDefaultFont', 8, 'bold'))
 
     def _draw_strip(self, y, trigger_len, patterns, forming):
         """Candles fechados; os ultimos numerados como o gatilho (1..N) e o candle de entrada como N+1."""
