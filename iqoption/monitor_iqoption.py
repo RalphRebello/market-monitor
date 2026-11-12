@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from time import time
@@ -9,7 +10,10 @@ from tkinter import ttk, messagebox
 from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, IQMultiStream, IQOptionError, IQSession,
                                       display_name)
 from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
-from iqoption.monitor_base import COLORS, STRIP_CANDLES, MonitorApp, normalize_symbol, pattern_title
+from iqoption.alarm import play_sequence_alarm
+from iqoption.monitor_base import (COLORS, SEQUENCE_COLOR, SEQUENCE_TEXT, STRIP_CANDLES, MonitorApp,
+                                   normalize_symbol, pattern_title)
+from core.sequences import ARMED, COMPLETED, CONFIRMING, FAILED
 from core.pattern_detector import (DIRECTIONS, GREEN, PATTERNS_FILE, PatternDetector, PatternError, candle_color,
                                    ms_to_datetime)
 
@@ -52,6 +56,40 @@ def block_wheel(widget, scroll=None):
 
     for sequence in WHEEL_EVENTS:
         widget.bind(sequence, on_wheel)
+
+
+def screen_area(widget, x, y):
+    """(esquerda, topo, direita, base) da area util do monitor mais proximo do ponto (x, y).
+
+    No Windows pergunta ao sistema (cada monitor e a barra de tarefas); nos demais, ou se falhar, usa a tela
+    inteira do Tk (no X11 ela ja junta todos os monitores).
+    """
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT),
+                            ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD)]
+
+            user32 = ctypes.windll.user32
+            user32.MonitorFromPoint.restype  = wintypes.HMONITOR
+            user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            user32.GetMonitorInfoW.argtypes  = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+
+            monitor     = user32.MonitorFromPoint(wintypes.POINT(x, y), 2)    # MONITOR_DEFAULTTONEAREST
+            info        = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work = info.rcWork
+                return work.left, work.top, work.right, work.bottom
+
+        except Exception:
+            pass
+
+    return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight()
 
 
 def heat_color(fraction):
@@ -103,12 +141,7 @@ class AssetCard:
         self.status_label = ttk.Label(head, foreground='#8a8f98')
         self.status_label.pack(side='left', fill='x', expand=True)
 
-        # Um grupo por tamanho de gatilho e tempo: faixa de candles, termometros desses padroes e separador.
-        self.groups = list(dict.fromkeys(pattern_group(pattern) for pattern in app.patterns))
-        height      = (len(self.groups) * CARD_STRIP + (len(self.groups) - 1) * CARD_GAP +
-                       len(app.patterns) * THERMO_ROW + 2)
-
-        self.canvas = tk.Canvas(body, height=height, background=CARD_BG, highlightthickness=0)
+        self.canvas = tk.Canvas(body, height=1, background=CARD_BG, highlightthickness=0)
         self.canvas.pack(fill='x')
 
         self.draw()
@@ -127,7 +160,20 @@ class AssetCard:
         canvas = self.canvas
         canvas.delete('all')
 
-        patterns  = self.app.patterns
+        # So os padroes ativos; um grupo por tamanho de gatilho e tempo: faixa de candles, termometros
+        # desses padroes e separador.
+        # Abaixo deles, uma linha por sequencia ativa.
+        patterns  = self.app.active_patterns
+        sequences = self.app.active_sequences
+        groups    = list(dict.fromkeys(pattern_group(pattern) for pattern in patterns))
+        height    = (len(groups) * CARD_STRIP + max(0, len(groups) - 1) * CARD_GAP +
+                     len(patterns) * THERMO_ROW + 2) if patterns else CARD_STRIP
+        if sequences:
+            height += CARD_GAP + len(sequences) * THERMO_ROW
+
+        if int(canvas.cget('height')) != height:
+            canvas.configure(height=height)
+
         detectors = {self.app.detector_of(self.name, pattern) for pattern in patterns} - {None}
         rows      = {row[0]: row for detector in detectors for row in detector.pattern_progress()}
         progress  = [rows.get(pattern, (pattern, 0, None)) for pattern in patterns]
@@ -135,8 +181,11 @@ class AssetCard:
 
         self.frame.configure(background=CARD_FORMED if any_done else CARD_BORDER)
 
+        if not patterns:
+            canvas.create_text(8, 18, anchor='w', fill='#8a8f98', text='Nenhum padrao ativo')
+
         y = 0
-        for group in self.groups:
+        for group in groups:
             if y:
                 # A largura real do canvas acompanha a janela; o excesso da linha fica cortado.
                 canvas.create_line(0, y + 2, 4000, y + 2, fill=SEPARATOR, width=2)
@@ -152,6 +201,31 @@ class AssetCard:
             for pattern, formed, entry in members:
                 self._draw_thermometer(y, pattern, formed, entry)
                 y += THERMO_ROW
+
+        if sequences:
+            y = max(y, CARD_STRIP)
+            canvas.create_line(0, y + 2, 4000, y + 2, fill=SEPARATOR, width=2)
+            y += CARD_GAP
+
+        for sequence in sequences:
+            self._draw_sequence(y, sequence)
+            y += THERMO_ROW
+
+    def _draw_sequence(self, y, sequence):
+        """Situacao da sequencia neste ativo: aguardando o primeiro padrao ou armada aguardando o segundo."""
+        armed      = self.app.tracker.armed_at(sequence, self.name) if self.name else None
+        confirming = self.app.tracker.confirming_at(sequence, self.name) if self.name else None
+
+        # Aguardando o primeiro: cinza. Armada, aguardando o segundo: amarelo, como o popup que vira.
+        waiting = sequence.first if armed is None else sequence.then
+        color   = '#8a8f98' if armed is None else SEQUENCE_COLOR
+
+        # Segundo formado: falta o candle de entrada dele fechar verde.
+        if confirming is not None:
+            waiting = f'vela de entrada {ms_to_datetime(confirming).strftime("%H:%M")} do {sequence.then} fechar verde'
+
+        self.canvas.create_text(6, y + 9, anchor='w', text=f'Sequencia {sequence.name} | Aguardando {waiting}',
+                                fill=color, font=('TkDefaultFont', 8, 'bold'))
 
     def _draw_strip(self, y, trigger_len, patterns, forming):
         """Candles fechados; os ultimos numerados como o gatilho (1..N) e o candle de entrada como N+1."""
@@ -311,11 +385,18 @@ class IQMonitorApp(MonitorApp):
             if isinstance(settings.get(key), bool):
                 var.set(settings[key])
 
+        for key, variables in (('disabled_patterns', self.pattern_vars), ('disabled_sequences', self.sequence_vars)):
+            disabled = settings.get(key)
+            if isinstance(disabled, list):
+                for name, var in variables.items():
+                    var.set(name not in disabled)
+
         self.interval_box['values'] = list(INTERVAL_SECONDS)
         if self.interval_var.get() not in INTERVAL_SECONDS:
             self.interval_var.set('1m')
 
         self._refresh_patterns()
+        self._redraw_cards()
 
         if self.saved_assets:
             self.write_log(f'Restaurados {len(self.cards)} cartao(oes) de {SETTINGS_FILE}' +
@@ -592,6 +673,8 @@ class IQMonitorApp(MonitorApp):
         removed = [name for name in watched if name not in self.symbols]
 
         for name in removed:
+            self.tracker.reset(asset=name)
+
             for stream in self.streams.values():
                 stream.remove_asset(name)
                 self.detectors[stream.interval].pop(name)
@@ -634,6 +717,26 @@ class IQMonitorApp(MonitorApp):
 
         self._save_settings()
         self.write_log('Filtro de minutos ' + ('ligado' if self.minutes_var.get() else 'desligado: qualquer horario'))
+
+    def _on_pattern_toggled(self, pattern):
+        """Liga/desliga um padrao: some dos cartoes e deixa de gerar alerta, sem reiniciar a procura."""
+        super()._on_pattern_toggled(pattern)
+        self._redraw_cards()
+        self._save_settings()
+
+    def _on_sequence_toggled(self, sequence):
+        """Ligada ou desligada, a sequencia recomeca do zero: aguardando o primeiro padrao."""
+        super()._on_sequence_toggled(sequence)
+        self.tracker.reset(sequence)
+        self._redraw_cards()
+        self._save_settings()
+
+    def _redraw_cards(self):
+        """Redesenha os cartoes; a altura deles muda com o numero de padroes ativos."""
+        for card in self.cards:
+            card.draw()
+
+        self._fit_cards_height()
 
     # ---------------------------------------------------------------- login
 
@@ -755,6 +858,7 @@ class IQMonitorApp(MonitorApp):
 
         self.main_interval = interval
         self.detectors     = {item: {} for item in intervals}
+        self.tracker.reset()
         self.asset_status  = {}
         for name in self.symbols:
             self._attach(name)
@@ -796,6 +900,7 @@ class IQMonitorApp(MonitorApp):
         self._stop_fixed_streams()
         super().stop_search()
         self.asset_status = {}
+        self.tracker.reset()
 
         for card in self.cards:
             card.set_status('')
@@ -805,6 +910,15 @@ class IQMonitorApp(MonitorApp):
     # -------------------------------------------------------------- events
 
     def _process_events(self):
+        """Roda a cada 100 ms; um erro numa rodada e registrado e nao interrompe as proximas."""
+        try:
+            self._drain_events()
+        except Exception as error:
+            self.write_log(f'Erro ao processar eventos: {error!r}', 'error')
+        finally:
+            self.root.after(100, self._process_events)
+
+    def _drain_events(self):
         """Processa os eventos do stream; cada cartao alterado e redesenhado uma vez por rodada."""
         changed = set()
 
@@ -873,11 +987,19 @@ class IQMonitorApp(MonitorApp):
             if card.name in changed:
                 card.draw()
 
-        self.root.after(100, self._process_events)
-
     def _on_asset_candle(self, name, candle, detector):
         # Os resultados (WIN/LOSS) que o detector confere nao sao exibidos: so os padroes formados.
         signals, _results = detector.add_closed_candle(candle)
+
+        # Primeiro a confirmacao das sequencias neste candle, depois os padroes que ele formou.
+        events = self.tracker.confirm(name, candle, self.active_sequences)
+
+        for sequence, kind, open_time in events:
+            self._on_sequence_confirmed(name, sequence, kind, open_time, detector)
+
+        if events:
+            for card in self._cards_of(name):
+                card.draw()
 
         for signal in signals:
             self._on_asset_signal(name, signal, detector)
@@ -903,36 +1025,126 @@ class IQMonitorApp(MonitorApp):
             if entry_candle is None and server_now < signal.entry_open_time + detector.interval_ms:
                 self._on_asset_signal(name, signal, detector)
 
-    def _on_asset_signal(self, name, signal, detector):
-        """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra.
-
-        Vale para qualquer ativo da procura, esteja ele na tela ou nao.
-        """
+    def _entry_text(self, entry_open_time, detector):
+        """(texto da entrada, segundos desde a abertura, entrada ja fechou)."""
         interval = detector.interval_ms / 1000
-        elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
-        entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+        elapsed  = (time() * 1000 - self.time_offset - entry_open_time) / 1000
+        entry    = ms_to_datetime(entry_open_time).strftime('%H:%M')
 
-        if elapsed >= interval:
+        if elapsed > LATE_SECONDS and elapsed < interval:
+            entry += f' (atrasado {int(elapsed)}s, fecha em {int(interval - elapsed)}s)'
+
+        return entry, elapsed, elapsed >= interval
+
+    def _on_asset_signal(self, name, signal, detector):
+        """Sinal de um padrao em qualquer ativo da procura, esteja ele na tela ou nao.
+
+        As sequencias acompanham o sinal mesmo com o padrao desativado; o alerta verde so sai se ativo.
+        """
+        events = self.tracker.observe(name, signal, detector.interval_ms, self.active_sequences)
+
+        if self.is_active(signal.pattern):
+            self._alert_pattern(name, signal, detector)
+
+        for sequence, kind, _first in events:
+            self._on_sequence_event(name, sequence, kind, signal, detector)
+
+        if events:
+            for card in self._cards_of(name):
+                card.draw()
+
+    def _alert_pattern(self, name, signal, detector):
+        """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra."""
+        entry, elapsed, missed = self._entry_text(signal.entry_open_time, detector)
+
+        if missed:
             self.write_log(f'Padrao perdido (sem alerta): {name} | {pattern_title(signal.pattern.name)} | '
                            f'entrada {entry} ja fechou, {int(elapsed)}s atrasado', 'error')
             return
 
-        if elapsed > LATE_SECONDS:
-            entry += f' (atrasado {int(elapsed)}s, fecha em {int(interval - elapsed)}s)'
-
         # Mesmo texto do popup: ativo, padrao formado e entrada (a hora do registro vem no inicio da linha).
         self.write_log(f'{name} | {pattern_title(signal.pattern.name)} | entrada {entry}', 'buy')
+        self._popup(signal, name, entry)
 
+    def _on_sequence_event(self, name, sequence, kind, signal, detector):
+        """Sequencia armada ou segundo padrao formado: so registra; o alerta espera o candle de entrada fechar."""
+        if kind == ARMED:
+            self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.first} formado, '
+                           f'aguardando {sequence.then}')
+
+        elif kind == CONFIRMING:
+            when = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+            self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.then} formado, '
+                           f'aguardando a vela {when} fechar verde')
+
+    def _on_sequence_confirmed(self, name, sequence, kind, candle_open_time, detector):
+        """Candle de entrada do segundo padrao fechou: verde gera o alerta amarelo e zera; senao segue armada."""
+        when = ms_to_datetime(candle_open_time).strftime('%H:%M')
+
+        if kind == FAILED:
+            self.write_log(f'{name} | Sequencia {sequence.name}: vela {when} do {sequence.then} nao fechou verde, '
+                           f'sem alerta; aguardando outro {sequence.then}')
+            return
+
+        # O alerta sai no fechamento da vela verde: a entrada passa a ser o candle seguinte.
+        entry, elapsed, missed = self._entry_text(candle_open_time + detector.interval_ms, detector)
+
+        if missed:
+            self.write_log(f'Sequencia perdida (sem alerta): {name} | {sequence.name} | entrada {entry} ja fechou, '
+                           f'{int(elapsed)}s atrasado; aguardando {sequence.first} de novo', 'error')
+            return
+
+        entry += f' (vela {when} fechou verde)'
+        self.write_log(f'{name} | Sequencia {sequence.name} | entrada {entry}', 'sequence')
+
+        # Com titulo proprio, o popup nao usa o sinal.
+        self._popup(None, name, entry, title=f'Sequencia {sequence.name}', color=SEQUENCE_COLOR,
+                    text_color=SEQUENCE_TEXT, sound=play_sequence_alarm)
+
+    def _popup(self, signal, name, entry, **style):
         if not self.alerts_var.get():
             return
 
-        # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
-        self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
-        alert       = self._show_alert(signal, name, entry, on_click=lambda: self._open_alert_card(name))
-        offset      = 40 * (len(self.alerts) % 10)
+        # Uma falha no popup nao pode derrubar o resto: registra e segue (o som ja saiu antes da janela).
+        try:
+            # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
+            self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
+            alert       = self._show_alert(signal, name, entry, on_click=lambda: self._open_alert_card(name),
+                                           **style)
+            offset      = 40 * (len(self.alerts) % 10)
+            x, y        = self._alert_position(alert, offset)
 
-        alert.geometry(f'+{self.root.winfo_rootx() + 80 + offset}+{self.root.winfo_rooty() + 80 + offset}')
-        self.alerts.append(alert)
+            alert.geometry(f'+{x}+{y}')
+            self.alerts.append(alert)
+
+        except Exception as error:
+            self.write_log(f'Erro ao abrir o popup de {name}: {error!r}', 'error')
+
+    def _alert_position(self, alert, offset):
+        """Canto do popup: perto da janela principal, sempre inteiro dentro de um monitor visivel.
+
+        Com a janela principal minimizada (no Windows ela fica em -32000) ou escondida, o popup vai para o
+        centro do monitor principal.
+        """
+        alert.update_idletasks()
+        width, height = alert.winfo_reqwidth(), alert.winfo_reqheight()
+        hidden        = self.root.state() in ('iconic', 'withdrawn')
+
+        if hidden:
+            anchor_x, anchor_y = 0, 0
+        else:
+            anchor_x, anchor_y = self.root.winfo_rootx() + 80, self.root.winfo_rooty() + 80
+
+        left, top, right, bottom = screen_area(alert, anchor_x, anchor_y)
+
+        if hidden:
+            anchor_x = left + (right - left - width) // 2
+            anchor_y = top + (bottom - top - height) // 2
+
+        x = max(left, min(anchor_x + offset, right - width))
+        y = max(top, min(anchor_y + offset, bottom - height))
+
+        return x, y
 
     def _save_settings(self):
         settings = {
@@ -942,6 +1154,8 @@ class IQMonitorApp(MonitorApp):
             'alerts'        : self.alerts_var.get(),
             'sound'         : self.sound_var.get(),
             'entry_minutes' : self.minutes_var.get(),
+            'disabled_patterns' : [name for name, var in self.pattern_vars.items() if not var.get()],
+            'disabled_sequences': [name for name, var in self.sequence_vars.items() if not var.get()],
             'searching'     : self.stream is not None,
             'geometry'      : self.root.geometry(),
         }

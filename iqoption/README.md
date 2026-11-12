@@ -74,9 +74,10 @@ Os demais controles:
 
 | Controle | O que faz |
 |---|---|
+| **Caixa de cada padrão** | Em **Padrões carregados**, cada padrão tem uma caixa, e todas vêm marcadas. Desmarcada, o padrão some dos cartões (a altura deles diminui) e não gera popup nem linha no histórico; marcada de novo, volta a valer a partir do próximo candle. Pode ser trocada com a procura ligada, sem reiniciá-la, e a escolha fica salva. Sem nenhum padrão marcado, os cartões mostram `Nenhum padrao ativo`. |
 | **Filtro de minutos 2/7** | Fica em **Padrões carregados** e vem ligado. Ligado: em `1m`, os Padrões 1 a 4 só valem com o candle 4 em minuto final 2 ou 7 (candle 9 em 7 ou 2). Desligado: valem em qualquer horário. Pode ser trocado com a procura ligada, sem reiniciá-la, e a escolha fica salva. Não afeta os Padrões 5 e 6. |
 | **Alertas ativos** | Ligado: cada padrão encontrado abre um popup verde com o ativo, o nome do padrão e o horário da entrada, que fica por cima das outras janelas e fecha sozinho após 30 s. Clicar no popup, fora do botão **Fechar alerta**, fecha-o, traz o monitor para a frente e abre o card do ativo; se o card já existir, mostra o que está aberto. Desligado: o sinal só aparece no histórico. |
-| **Som** | Toca o aviso sonoro (3 bipes) junto com o popup. Só tem efeito com os alertas ligados. |
+| **Som** | Toca o aviso sonoro junto com o popup: 3 bipes nos padrões e um alarme de bipes agudos alternados (~1 s) no popup amarelo da sequência. Só tem efeito com os alertas ligados. |
 | **Candle atual fecha em** | Contagem regressiva até o fechamento do candle em andamento, pelo relógio do servidor da IQ Option. |
 | **Histórico** | Eventos com horário: conexão e erros e, para cada padrão formado, a mesma mensagem do popup: `15:17:02 Gold/BRL \| Padrao 2 \| entrada 15:17`. O monitor não mostra resultados (WIN/LOSS) nem placar: só avisa os padrões formados (para medir o acerto, use o [backtest](#backtest-com-os-candles-da-iq-option)). |
 
@@ -101,7 +102,7 @@ candle é trocado pela versão final. Se a cor mudou num ativo da tela, o histó
 
 Ao fechar a janela, ao iniciar uma procura e ao adicionar, fechar ou trocar um cartão, o monitor grava em
 `~/.config/monitor_padroes/iqoption.json` o **Tipo**, os ativos dos cartões na tela, o **Tempo**,
-as opções **Alertas ativos** e **Som**, o tamanho da janela e se a procura
+as opções **Alertas ativos** e **Som**, os padrões e sequências ligados e desligados, o tamanho da janela e se a procura
 estava ligada. Ao abrir de novo, tudo volta como estava; o histórico avisa `Restaurados N cartao(oes)`.
 
 - **E-mail e senha não são gravados.** Continue usando `IQ_LOGIN`/`IQ_PASSWORD` se não quiser digitá-los (`IQ_EMAIL` também é aceito no lugar de `IQ_LOGIN`).
@@ -148,6 +149,43 @@ Conta o maior trecho final dos candles fechados que repete o início do gatilho
 trecho que ainda serve (às vezes 0). Com regra de minuto valendo (Padrão 6 sempre; Padrões 1 a 4 com o filtro
 ligado, em `1m`), só conta se a entrada prevista cair no minuto aceito; senão ele fica em 0%. O termômetro usa só candles fechados (a
 IQ Option não envia o preço do candle em andamento).
+
+### Sequência Padrão 5 → Padrão 1
+
+Além dos alertas de cada padrão, o monitor acompanha uma **sequência** em cada ativo da procura:
+
+1. Quando o **Padrão 5** se forma no ativo, a sequência fica **armada** nele. O histórico registra
+   `X | Sequencia Padrao 5 -> Padrao 1: Padrao 5 formado, aguardando Padrao 1`.
+2. Quando o **Padrão 1** se forma depois disso **no mesmo ativo** (8 velas do gatilho), o histórico registra
+   `X | Sequencia Padrao 5 -> Padrao 1: Padrao 1 formado, aguardando a vela HH:MM fechar verde`. Ainda não há alerta.
+3. Quando a **9ª vela do Padrão 1** fecha **verde**, sai um **popup amarelo** (`Sequencia Padrao 5 -> Padrao 1`,
+   `entrada HH:MM (vela HH:MM fechou verde)`, em que a entrada é a vela seguinte), e o histórico mostra a mesma
+   linha em amarelo. A sequência **zera** e volta a esperar um novo Padrão 5.
+4. Se a 9ª vela fechar **vermelha ou doji**, não há alerta: o histórico registra
+   `... nao fechou verde, sem alerta; aguardando outro Padrao 1`, e a sequência **continua armada** esperando
+   outro Padrão 1 (sem precisar de um novo Padrão 5).
+
+Regras:
+
+- Nenhuma vela do Padrão 5 conta para o Padrão 1. A vela 13 (a do alerta do Padrão 5) pode ser a primeira do
+  Padrão 1.
+- O Padrão 1 da sequência obedece ao **Filtro de minutos 2/7**, como o Padrão 1 normal.
+- A espera não expira. Um novo Padrão 5 antes do Padrão 1 reinicia a espera a partir dele.
+- Os alertas verdes dos Padrões 5 e 1 continuam saindo normalmente. O amarelo é um aviso a mais.
+- A sequência tem caixa própria em **Padrões carregados** e funciona mesmo com as caixas dos Padrões 5 e 1
+  desmarcadas (assim dá para receber só o alerta amarelo). Desmarcar ou marcar a caixa zera a sequência.
+- Cada cartão mostra, abaixo dos termômetros, a linha `Sequencia Padrao 5 -> Padrao 1 | Aguardando Padrao 5`
+  em cinza. Depois do Padrão 5, o final muda para `| Aguardando Padrao 1` e a linha fica amarela. Durante a 9ª
+  vela do Padrão 1 ela mostra `| Aguardando vela de entrada HH:MM do Padrao 1 fechar verde`. Depois do alerta
+  amarelo volta para `Aguardando Padrao 5`.
+- Um novo Padrão 5 enquanto a 9ª vela do Padrão 1 está aberta reinicia a espera e descarta esse Padrão 1.
+- Se a IQ Option corrigir a cor da 9ª vela depois do alerta, o alerta não é desfeito; só sai o aviso de correção.
+- Parar a procura, iniciá-la de novo ou fechar o programa zera todas as sequências.
+- Como os 9 primeiros candles do Padrão 5 são o próprio Padrão 1, um segundo Padrão 5 que comece depois do
+  primeiro já completa a sequência no meio do caminho (com o filtro de minutos, só se a entrada cair em 7/2).
+
+A sequência é definida em `sequences` no `patterns/patterns.json` (`first` arma e `then` completa), e outras
+podem ser adicionadas ali.
 
 ## Padrões
 
@@ -214,6 +252,9 @@ No JSON, as regras ficam em `entry_minutes`, que vale para o **minuto de abertur
             "minutes_candle": 4,
             "minutes_optional": true
         }
+    ],
+    "sequences": [
+        {"name": "Padrao 5 -> Padrao 1", "first": "Padrao 5", "then": "Padrao 1"}
     ]
 }
 ```
@@ -229,6 +270,7 @@ No JSON, as regras ficam em `entry_minutes`, que vale para o **minuto de abertur
 | `minutes_candle` | não (padrão `1`) | Candle marcado na imagem. Só muda o texto da regra no painel, como `candle 4 em minutos final 2/7 e candle 9 em final 7/2`. |
 | `minutes_optional` | não (padrão `false`) | `true`: a regra obedece ao **Filtro de minutos** do painel. `false`: `entry_minutes` vale sempre. |
 | `image` | não | Só referência para a imagem de origem; o programa não lê o arquivo. |
+| `sequences` | não | Lista de sequências (ver [Sequência Padrão 5 → Padrão 1](#sequência-padrão-5--padrão-1)). Cada uma tem `name` (nome no painel, no cartão e no popup amarelo), `first` (padrão que arma) e `then` (padrão que completa), com os nomes exatos de `patterns`. Nome inexistente ou o mesmo padrão nos dois impede o monitor de abrir, com uma mensagem. |
 
 Para **adicionar um padrão**, inclua uma nova entrada em `patterns` e reinicie o monitor. Se o arquivo tiver
 erro (letra inválida, JSON malformado), o monitor mostra uma mensagem e não abre.
@@ -292,10 +334,12 @@ market-monitor/
 │   ├── iqoption_client.py        # IQSession (conexão) + IQMultiStream (candles de todos os ativos)
 │   ├── backtest.py               # backtest dos padrões com candles da IQ Option
 │   ├── settings.py               # escolhas salvas (sem depender da interface gráfica)
+│   ├── alarm.py                  # alarme do alerta da sequência (gerado em código, Linux e Windows)
 │   ├── requirements.txt
 │   └── README.md                 # este documento
 │
 ├── core/pattern_detector.py      # detecção dos padrões (sem interface)
+├── core/sequences.py             # sequências de padrões por ativo (sem interface)
 ├── patterns/patterns.json        # padrões + imagens de referência
 └── windows/                      # build do executável para Windows
 ```
@@ -425,7 +469,12 @@ desenha o detector do seu ativo.
 | `_sync_stream` / `_attach` | a cada atualização da lista, inclui no stream os ativos que abriram e tira os que fecharam |
 | `_log_history_signals` | padrão do histórico com a entrada ainda aberta vira sinal com alerta; os que já passaram são ignorados |
 | `_process_events` | eventos por ativo; os cartões dos ativos alterados são redesenhados uma vez por rodada |
-| `_on_asset_signal` | sinal de qualquer ativo da procura (na tela ou não), com o nome do ativo e o atraso; no histórico, o mesmo texto do popup; entrada já fechada vira `Padrao perdido`; alertas em cascata |
+| `_on_asset_signal` | sinal de qualquer ativo da procura (na tela ou não): passa pelo `SequenceTracker` (mesmo com o padrão desmarcado) e, se o padrão estiver marcado, vai para `_alert_pattern` |
+| `_alert_pattern` / `_popup` | alerta verde com o nome do ativo e o atraso; no histórico, o mesmo texto do popup; entrada já fechada vira `Padrao perdido`; alertas em cascata |
+| `_on_sequence_event` | sequência armada ou Padrão 1 formado aguardando a 9ª vela (só histórico) |
+| `_on_sequence_confirmed` | 9ª vela do Padrão 1 fechou: verde gera popup e linha amarelos e zera; vermelha/doji só registra e segue armada; alerta atrasado vira `Sequencia perdida` |
+| `_on_pattern_toggled` / `_on_sequence_toggled` / `_redraw_cards` | caixas de **Padrões carregados**: redesenham os cartões (a altura muda) e salvam a escolha; a da sequência também a zera |
+| `AssetCard._draw_sequence` | linha `Sequencia ... \| Aguardando ...` do cartão, cinza ou amarela |
 | `_on_asset_revised` | aplica um candle corrigido pela IQ Option e avisa se a cor mudou |
 | `_save_settings` / `load_settings` | grava e restaura as escolhas da janela (`SETTINGS_FILE`, em `settings.py`) |
 | `on_close` | salva as escolhas e também fecha a sessão da IQ Option |

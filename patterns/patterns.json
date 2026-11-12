@@ -9,7 +9,10 @@
     "minutes_optional: true = a regra pode ser ligada e desligada no monitor (filtro de minutos).",
     "Padroes 1 a 4: candle 4 em 2/7 e candle 9 (entrada) em 7/2, 5 minutos depois: [7, 2], so em 1m.",
     "interval dentro de um padrao: tempo fixo dele, independente do Tempo escolhido no monitor.",
-    "Padrao 6: sempre em 1m; o candle 1 abre em final 1, logo o candle 8 abre em final 8: [8]."
+    "Padrao 6: sempre em 1m; o candle 1 abre em final 1, logo o candle 8 abre em final 8: [8].",
+    "sequences: first formado arma a sequencia no ativo; then formado depois aguarda a vela de entrada dele.",
+    "Vela de entrada de then fechou verde: alerta amarelo e zera; vermelha ou doji: sem alerta, segue armada.",
+    "Nenhum candle do gatilho de first conta para then; o candle de alerta de first pode ser o 1o de then."
   ],
   "interval": "1m",
   "patterns": [
@@ -59,6 +62,13 @@
       "interval": "1m",
       "alert_only": true,
       "entry_minutes": [8]
+    }
+  ],
+  "sequences": [
+    {
+      "name": "Padrao 5 -> Padrao 1",
+      "first": "Padrao 5",
+      "then": "Padrao 1"
     }
   ]
 }

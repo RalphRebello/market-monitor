@@ -7,6 +7,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from core.pattern_detector import (DIRECTIONS, DOJI, GREEN, INTERVAL_MS, PATTERNS_FILE, RED, load_patterns,
                                    ms_to_datetime)
+from core.sequences import SequenceTracker, load_sequences
 
 
 ALERT_SECONDS  = 30
@@ -17,6 +18,10 @@ COLORS = {
     RED   : '#e5262d',
     DOJI  : '#8a8f98',
 }
+
+SEQUENCE_COLOR = '#f1c40f'    # popup da sequencia (amarelo)
+SEQUENCE_TEXT  = '#1f2630'    # texto escuro, legivel no amarelo
+SEQUENCE_LOG   = '#b7950b'    # amarelo mais escuro, legivel no fundo claro do historico
 
 
 def pattern_title(name):
@@ -45,6 +50,8 @@ class MonitorApp:
 
         # O intervalo do JSON e o padrao e o unico em que o filtro de minutos se aplica.
         self.patterns_interval, self.patterns = load_patterns(PATTERNS_FILE)
+        self.sequences = load_sequences(PATTERNS_FILE, self.patterns)
+        self.tracker   = SequenceTracker(self.sequences)
 
         self.events      = queue.Queue()
         self.stream      = None
@@ -58,6 +65,8 @@ class MonitorApp:
         self.minutes_var  = tk.BooleanVar(value=True)
         self.alerts_var   = tk.BooleanVar(value=True)
         self.sound_var    = tk.BooleanVar(value=True)
+        self.pattern_vars = {pattern.name: tk.BooleanVar(value=True) for pattern in self.patterns}
+        self.sequence_vars = {sequence.name: tk.BooleanVar(value=True) for sequence in self.sequences}
 
         self._build_ui()
         self._load_symbols()
@@ -110,9 +119,20 @@ class MonitorApp:
                             text=f'Filtro de minutos {minutes} (so em {self.patterns_interval}): {names}',
                             command=self._on_minutes_toggled).pack(anchor='w', pady=(0, 4))
 
-        self.pattern_labels = [ttk.Label(self.patterns_frame) for _ in self.patterns]
+        # Uma caixa por padrao: desmarcado, o padrao nao aparece nos cartoes nem gera alerta.
+        self.pattern_labels = [ttk.Checkbutton(self.patterns_frame, variable=self.pattern_vars[pattern.name],
+                                               command=lambda pattern=pattern: self._on_pattern_toggled(pattern))
+                               for pattern in self.patterns]
         for label in self.pattern_labels:
             label.pack(anchor='w')
+
+        # Sequencias: caixa propria, independente das caixas dos padroes que a formam.
+        for sequence in self.sequences:
+            ttk.Checkbutton(self.patterns_frame, variable=self.sequence_vars[sequence.name],
+                            text=f'Sequencia {sequence.name}: depois do {sequence.first}, o {sequence.then} '
+                                 f'gera alerta amarelo e a sequencia zera',
+                            command=lambda sequence=sequence: self._on_sequence_toggled(sequence)
+                            ).pack(anchor='w', pady=(4, 0))
 
         self._refresh_patterns()
 
@@ -122,6 +142,7 @@ class MonitorApp:
         self.log.tag_configure('buy', foreground=COLORS[GREEN], font=('Courier', 10, 'bold'))
         self.log.tag_configure('sell', foreground=COLORS[RED], font=('Courier', 10, 'bold'))
         self.log.tag_configure('error', foreground='#d35400')
+        self.log.tag_configure('sequence', foreground=SEQUENCE_LOG, font=('Courier', 10, 'bold'))
 
     def write_log(self, text, tag=None):
         now = ms_to_datetime(time() * 1000).strftime('%H:%M:%S')
@@ -130,6 +151,25 @@ class MonitorApp:
         self.log.insert('end', f'[{now}] {text}\n', tag)
         self.log.see('end')
         self.log.configure(state='disabled')
+
+    @property
+    def active_patterns(self):
+        """Padroes ligados nas caixas de Padroes carregados."""
+        return [pattern for pattern in self.patterns if self.pattern_vars[pattern.name].get()]
+
+    def is_active(self, pattern):
+        return self.pattern_vars[pattern.name].get()
+
+    @property
+    def active_sequences(self):
+        return [sequence for sequence in self.sequences if self.sequence_vars[sequence.name].get()]
+
+    def _on_sequence_toggled(self, sequence):
+        self.write_log(f'Sequencia {sequence.name} ' +
+                       ('ativada' if self.sequence_vars[sequence.name].get() else 'desativada'))
+
+    def _on_pattern_toggled(self, pattern):
+        self.write_log(f'{pattern_title(pattern.name)} ' + ('ativado' if self.is_active(pattern) else 'desativado'))
 
     def _use_entry_minutes(self, interval):
         """O filtro de minutos (minutes_optional) so vale se estiver ligado e no tempo do patterns.json."""
@@ -226,25 +266,37 @@ class MonitorApp:
 
     # -------------------------------------------------------------- alerts
 
-    def _show_alert(self, signal, symbol, entry, on_click=None):
-        # Sempre verde: o alerta avisa que um padrao se formou, sem destacar a direcao.
-        color = COLORS[GREEN]
+    def _show_alert(self, signal, symbol, entry, on_click=None, title=None, color=None, text_color='white',
+                    sound=None):
+        # Verde: o alerta avisa que um padrao se formou, sem destacar a direcao. A sequencia usa amarelo.
+        color = color or COLORS[GREEN]
+        title = title or pattern_title(signal.pattern.name)
+
+        # O som vem antes da janela: se ela falhar, o aviso sonoro ja saiu.
+        # sound: funcao que toca um som proprio (a sequencia usa o alarme); sem ela, 3 bipes do sistema.
+        if self.sound_var.get():
+            if sound:
+                sound(self.root)
+            else:
+                for i in range(3):
+                    self.root.after(i * 300, self.root.bell)
 
         alert = tk.Toplevel(self.root)
         alert.title('Padrao encontrado')
         alert.configure(background=color)
         alert.attributes('-topmost', True)
+        self._keep_on_top(alert)
 
         tk.Label(alert, text=symbol, font=('sans', 26, 'bold'),
-                 background=color, foreground='white').pack(padx=30, pady=(20, 6))
-        tk.Label(alert, text=pattern_title(signal.pattern.name), font=('sans', 16, 'bold'),
-                 background=color, foreground='white').pack(padx=30)
+                 background=color, foreground=text_color).pack(padx=30, pady=(20, 6))
+        tk.Label(alert, text=title, font=('sans', 16, 'bold'),
+                 background=color, foreground=text_color).pack(padx=30)
         tk.Label(alert, text=f'entrada {entry}', font=('sans', 12),
-                 background=color, foreground='white').pack(padx=30, pady=(4, 10))
+                 background=color, foreground=text_color).pack(padx=30, pady=(4, 10))
 
         if on_click:
             tk.Label(alert, text='clique para abrir o card', font=('sans', 10),
-                     background=color, foreground='white').pack(padx=30, pady=(0, 10))
+                     background=color, foreground=text_color).pack(padx=30, pady=(0, 10))
 
         ok = ttk.Button(alert, text='Fechar alerta', command=alert.destroy)
         ok.pack(pady=(0, 16))
@@ -262,11 +314,31 @@ class MonitorApp:
 
         alert.after(ALERT_SECONDS * 1000, alert.destroy)
 
-        if self.sound_var.get():
-            for i in range(3):
-                self.root.after(i * 300, self.root.bell)
-
         return alert
+
+    @staticmethod
+    def _keep_on_top(alert):
+        """Reaplica o 'sempre por cima' depois que a janela aparece na tela.
+
+        Pedido so antes de a janela aparecer, o gerenciador de janelas pode ignora-lo ou atrasa-lo (protecao
+        contra roubo de foco do GNOME, por exemplo) e o popup nasce atras da janela ativa. Reaplica ao
+        aparecer e de novo 300 ms depois.
+        """
+        def raise_alert():
+            try:
+                if alert.winfo_exists():
+                    alert.attributes('-topmost', True)
+                    alert.lift()
+            except tk.TclError:
+                pass    # fechado nesse meio tempo
+
+        def mapped(event):
+            # <Map> da janela tambem chega pelos widgets dentro dela: so conta o da propria janela.
+            if event.widget is alert:
+                raise_alert()
+
+        alert.bind('<Map>', mapped, add='+')
+        alert.after(300, raise_alert)
 
     def _tick(self):
         if self.close_time:
