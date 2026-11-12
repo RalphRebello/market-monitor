@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from time import time
@@ -9,9 +10,10 @@ from tkinter import ttk, messagebox
 from iqoption.iqoption_client import (ASSET_TYPES, INTERVAL_SECONDS, IQMultiStream, IQOptionError, IQSession,
                                       display_name)
 from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
+from iqoption.alarm import play_sequence_alarm
 from iqoption.monitor_base import (COLORS, SEQUENCE_COLOR, SEQUENCE_TEXT, STRIP_CANDLES, MonitorApp,
                                    normalize_symbol, pattern_title)
-from core.sequences import ARMED, COMPLETED
+from core.sequences import ARMED, COMPLETED, CONFIRMING, FAILED
 from core.pattern_detector import (DIRECTIONS, GREEN, PATTERNS_FILE, PatternDetector, PatternError, candle_color,
                                    ms_to_datetime)
 
@@ -54,6 +56,40 @@ def block_wheel(widget, scroll=None):
 
     for sequence in WHEEL_EVENTS:
         widget.bind(sequence, on_wheel)
+
+
+def screen_area(widget, x, y):
+    """(esquerda, topo, direita, base) da area util do monitor mais proximo do ponto (x, y).
+
+    No Windows pergunta ao sistema (cada monitor e a barra de tarefas); nos demais, ou se falhar, usa a tela
+    inteira do Tk (no X11 ela ja junta todos os monitores).
+    """
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT),
+                            ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD)]
+
+            user32 = ctypes.windll.user32
+            user32.MonitorFromPoint.restype  = wintypes.HMONITOR
+            user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            user32.GetMonitorInfoW.argtypes  = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+
+            monitor     = user32.MonitorFromPoint(wintypes.POINT(x, y), 2)    # MONITOR_DEFAULTTONEAREST
+            info        = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work = info.rcWork
+                return work.left, work.top, work.right, work.bottom
+
+        except Exception:
+            pass
+
+    return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight()
 
 
 def heat_color(fraction):
@@ -177,11 +213,16 @@ class AssetCard:
 
     def _draw_sequence(self, y, sequence):
         """Situacao da sequencia neste ativo: aguardando o primeiro padrao ou armada aguardando o segundo."""
-        armed = self.app.tracker.armed_at(sequence, self.name) if self.name else None
+        armed      = self.app.tracker.armed_at(sequence, self.name) if self.name else None
+        confirming = self.app.tracker.confirming_at(sequence, self.name) if self.name else None
 
         # Aguardando o primeiro: cinza. Armada, aguardando o segundo: amarelo, como o popup que vira.
         waiting = sequence.first if armed is None else sequence.then
         color   = '#8a8f98' if armed is None else SEQUENCE_COLOR
+
+        # Segundo formado: falta o candle de entrada dele fechar verde.
+        if confirming is not None:
+            waiting = f'vela de entrada {ms_to_datetime(confirming).strftime("%H:%M")} do {sequence.then} fechar verde'
 
         self.canvas.create_text(6, y + 9, anchor='w', text=f'Sequencia {sequence.name} | Aguardando {waiting}',
                                 fill=color, font=('TkDefaultFont', 8, 'bold'))
@@ -869,6 +910,15 @@ class IQMonitorApp(MonitorApp):
     # -------------------------------------------------------------- events
 
     def _process_events(self):
+        """Roda a cada 100 ms; um erro numa rodada e registrado e nao interrompe as proximas."""
+        try:
+            self._drain_events()
+        except Exception as error:
+            self.write_log(f'Erro ao processar eventos: {error!r}', 'error')
+        finally:
+            self.root.after(100, self._process_events)
+
+    def _drain_events(self):
         """Processa os eventos do stream; cada cartao alterado e redesenhado uma vez por rodada."""
         changed = set()
 
@@ -937,11 +987,19 @@ class IQMonitorApp(MonitorApp):
             if card.name in changed:
                 card.draw()
 
-        self.root.after(100, self._process_events)
-
     def _on_asset_candle(self, name, candle, detector):
         # Os resultados (WIN/LOSS) que o detector confere nao sao exibidos: so os padroes formados.
         signals, _results = detector.add_closed_candle(candle)
+
+        # Primeiro a confirmacao das sequencias neste candle, depois os padroes que ele formou.
+        events = self.tracker.confirm(name, candle, self.active_sequences)
+
+        for sequence, kind, open_time in events:
+            self._on_sequence_confirmed(name, sequence, kind, open_time, detector)
+
+        if events:
+            for card in self._cards_of(name):
+                card.draw()
 
         for signal in signals:
             self._on_asset_signal(name, signal, detector)
@@ -967,11 +1025,11 @@ class IQMonitorApp(MonitorApp):
             if entry_candle is None and server_now < signal.entry_open_time + detector.interval_ms:
                 self._on_asset_signal(name, signal, detector)
 
-    def _entry_text(self, signal, detector):
+    def _entry_text(self, entry_open_time, detector):
         """(texto da entrada, segundos desde a abertura, entrada ja fechou)."""
         interval = detector.interval_ms / 1000
-        elapsed  = (time() * 1000 - self.time_offset - signal.entry_open_time) / 1000
-        entry    = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+        elapsed  = (time() * 1000 - self.time_offset - entry_open_time) / 1000
+        entry    = ms_to_datetime(entry_open_time).strftime('%H:%M')
 
         if elapsed > LATE_SECONDS and elapsed < interval:
             entry += f' (atrasado {int(elapsed)}s, fecha em {int(interval - elapsed)}s)'
@@ -997,7 +1055,7 @@ class IQMonitorApp(MonitorApp):
 
     def _alert_pattern(self, name, signal, detector):
         """Alerta de um padrao cujo candle de entrada esta aberto; se ja fechou, so registra."""
-        entry, elapsed, missed = self._entry_text(signal, detector)
+        entry, elapsed, missed = self._entry_text(signal.entry_open_time, detector)
 
         if missed:
             self.write_log(f'Padrao perdido (sem alerta): {name} | {pattern_title(signal.pattern.name)} | '
@@ -1009,34 +1067,84 @@ class IQMonitorApp(MonitorApp):
         self._popup(signal, name, entry)
 
     def _on_sequence_event(self, name, sequence, kind, signal, detector):
-        """Sequencia armada (so registra) ou completada (alerta amarelo); completada, ela zera."""
+        """Sequencia armada ou segundo padrao formado: so registra; o alerta espera o candle de entrada fechar."""
         if kind == ARMED:
             self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.first} formado, '
                            f'aguardando {sequence.then}')
+
+        elif kind == CONFIRMING:
+            when = ms_to_datetime(signal.entry_open_time).strftime('%H:%M')
+            self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.then} formado, '
+                           f'aguardando a vela {when} fechar verde')
+
+    def _on_sequence_confirmed(self, name, sequence, kind, candle_open_time, detector):
+        """Candle de entrada do segundo padrao fechou: verde gera o alerta amarelo e zera; senao segue armada."""
+        when = ms_to_datetime(candle_open_time).strftime('%H:%M')
+
+        if kind == FAILED:
+            self.write_log(f'{name} | Sequencia {sequence.name}: vela {when} do {sequence.then} nao fechou verde, '
+                           f'sem alerta; aguardando outro {sequence.then}')
             return
 
-        entry, elapsed, missed = self._entry_text(signal, detector)
+        # O alerta sai no fechamento da vela verde: a entrada passa a ser o candle seguinte.
+        entry, elapsed, missed = self._entry_text(candle_open_time + detector.interval_ms, detector)
 
         if missed:
             self.write_log(f'Sequencia perdida (sem alerta): {name} | {sequence.name} | entrada {entry} ja fechou, '
                            f'{int(elapsed)}s atrasado; aguardando {sequence.first} de novo', 'error')
             return
 
+        entry += f' (vela {when} fechou verde)'
         self.write_log(f'{name} | Sequencia {sequence.name} | entrada {entry}', 'sequence')
-        self._popup(signal, name, entry, title=f'Sequencia {sequence.name}', color=SEQUENCE_COLOR,
-                    text_color=SEQUENCE_TEXT)
+
+        # Com titulo proprio, o popup nao usa o sinal.
+        self._popup(None, name, entry, title=f'Sequencia {sequence.name}', color=SEQUENCE_COLOR,
+                    text_color=SEQUENCE_TEXT, sound=play_sequence_alarm)
 
     def _popup(self, signal, name, entry, **style):
         if not self.alerts_var.get():
             return
 
-        # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
-        self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
-        alert       = self._show_alert(signal, name, entry, on_click=lambda: self._open_alert_card(name), **style)
-        offset      = 40 * (len(self.alerts) % 10)
+        # Uma falha no popup nao pode derrubar o resto: registra e segue (o som ja saiu antes da janela).
+        try:
+            # Varios ativos podem sinalizar no mesmo candle: os alertas abrem em cascata, sem se cobrir.
+            self.alerts = [alert for alert in self.alerts if alert.winfo_exists()]
+            alert       = self._show_alert(signal, name, entry, on_click=lambda: self._open_alert_card(name),
+                                           **style)
+            offset      = 40 * (len(self.alerts) % 10)
+            x, y        = self._alert_position(alert, offset)
 
-        alert.geometry(f'+{self.root.winfo_rootx() + 80 + offset}+{self.root.winfo_rooty() + 80 + offset}')
-        self.alerts.append(alert)
+            alert.geometry(f'+{x}+{y}')
+            self.alerts.append(alert)
+
+        except Exception as error:
+            self.write_log(f'Erro ao abrir o popup de {name}: {error!r}', 'error')
+
+    def _alert_position(self, alert, offset):
+        """Canto do popup: perto da janela principal, sempre inteiro dentro de um monitor visivel.
+
+        Com a janela principal minimizada (no Windows ela fica em -32000) ou escondida, o popup vai para o
+        centro do monitor principal.
+        """
+        alert.update_idletasks()
+        width, height = alert.winfo_reqwidth(), alert.winfo_reqheight()
+        hidden        = self.root.state() in ('iconic', 'withdrawn')
+
+        if hidden:
+            anchor_x, anchor_y = 0, 0
+        else:
+            anchor_x, anchor_y = self.root.winfo_rootx() + 80, self.root.winfo_rooty() + 80
+
+        left, top, right, bottom = screen_area(alert, anchor_x, anchor_y)
+
+        if hidden:
+            anchor_x = left + (right - left - width) // 2
+            anchor_y = top + (bottom - top - height) // 2
+
+        x = max(left, min(anchor_x + offset, right - width))
+        y = max(top, min(anchor_y + offset, bottom - height))
+
+        return x, y
 
     def _save_settings(self):
         settings = {

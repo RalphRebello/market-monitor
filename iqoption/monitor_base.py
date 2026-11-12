@@ -266,15 +266,26 @@ class MonitorApp:
 
     # -------------------------------------------------------------- alerts
 
-    def _show_alert(self, signal, symbol, entry, on_click=None, title=None, color=None, text_color='white'):
+    def _show_alert(self, signal, symbol, entry, on_click=None, title=None, color=None, text_color='white',
+                    sound=None):
         # Verde: o alerta avisa que um padrao se formou, sem destacar a direcao. A sequencia usa amarelo.
         color = color or COLORS[GREEN]
         title = title or pattern_title(signal.pattern.name)
+
+        # O som vem antes da janela: se ela falhar, o aviso sonoro ja saiu.
+        # sound: funcao que toca um som proprio (a sequencia usa o alarme); sem ela, 3 bipes do sistema.
+        if self.sound_var.get():
+            if sound:
+                sound(self.root)
+            else:
+                for i in range(3):
+                    self.root.after(i * 300, self.root.bell)
 
         alert = tk.Toplevel(self.root)
         alert.title('Padrao encontrado')
         alert.configure(background=color)
         alert.attributes('-topmost', True)
+        self._keep_on_top(alert)
 
         tk.Label(alert, text=symbol, font=('sans', 26, 'bold'),
                  background=color, foreground=text_color).pack(padx=30, pady=(20, 6))
@@ -303,11 +314,31 @@ class MonitorApp:
 
         alert.after(ALERT_SECONDS * 1000, alert.destroy)
 
-        if self.sound_var.get():
-            for i in range(3):
-                self.root.after(i * 300, self.root.bell)
-
         return alert
+
+    @staticmethod
+    def _keep_on_top(alert):
+        """Reaplica o 'sempre por cima' depois que a janela aparece na tela.
+
+        Pedido so antes de a janela aparecer, o gerenciador de janelas pode ignora-lo ou atrasa-lo (protecao
+        contra roubo de foco do GNOME, por exemplo) e o popup nasce atras da janela ativa. Reaplica ao
+        aparecer e de novo 300 ms depois.
+        """
+        def raise_alert():
+            try:
+                if alert.winfo_exists():
+                    alert.attributes('-topmost', True)
+                    alert.lift()
+            except tk.TclError:
+                pass    # fechado nesse meio tempo
+
+        def mapped(event):
+            # <Map> da janela tambem chega pelos widgets dentro dela: so conta o da propria janela.
+            if event.widget is alert:
+                raise_alert()
+
+        alert.bind('<Map>', mapped, add='+')
+        alert.after(300, raise_alert)
 
     def _tick(self):
         if self.close_time:
