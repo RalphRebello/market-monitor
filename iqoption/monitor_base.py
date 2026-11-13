@@ -11,6 +11,7 @@ from core.sequences import SequenceTracker, load_sequences
 
 
 ALERT_SECONDS  = 30
+TOPMOST_PULSE_MS = 500   # quanto tempo a janela fica "sempre por cima" ao vir para a frente
 STRIP_CANDLES  = 16
 
 COLORS = {
@@ -129,7 +130,9 @@ class MonitorApp:
         # Sequencias: caixa propria, independente das caixas dos padroes que a formam.
         for sequence in self.sequences:
             ttk.Checkbutton(self.patterns_frame, variable=self.sequence_vars[sequence.name],
-                            text=f'Sequencia {sequence.name}: depois do {sequence.first}, o {sequence.then} '
+                            text=f'Sequencia {sequence.name}: depois do {sequence.first}'
+                                 + (f' + vela(s) {sequence.first_extra}' if sequence.first_extra else '') +
+                                 f', o {sequence.then} '
                                  f'gera alerta amarelo e a sequencia zera',
                             command=lambda sequence=sequence: self._on_sequence_toggled(sequence)
                             ).pack(anchor='w', pady=(4, 0))
@@ -304,8 +307,10 @@ class MonitorApp:
         if on_click:
             def clicked(event):
                 if event.widget is not ok:
-                    alert.destroy()
+                    # Primeiro a acao (que traz a janela para a frente), depois fecha o popup: no Windows,
+                    # fechar antes ativa a janela de outro programa e o monitor perde o direito de vir a frente.
                     on_click()
+                    alert.destroy()
 
             # O bind na janela vale para os textos dentro dela; o botao continua so fechando.
             alert.configure(cursor='hand2')
@@ -315,6 +320,32 @@ class MonitorApp:
         alert.after(ALERT_SECONDS * 1000, alert.destroy)
 
         return alert
+
+    def bring_to_front(self):
+        """Traz a janela principal para o primeiro plano, mesmo atras da janela de outro programa.
+
+        lift() e focus_force() sozinhos podem so piscar o icone na barra de tarefas (o Windows e o GNOME
+        bloqueiam o roubo de foco). Ligar o 'sempre por cima' por um instante sobe a janela de qualquer jeito;
+        desligado em seguida, o monitor nao fica preso acima dos outros programas. Os popups sao 'sempre por
+        cima' tambem, entao continuam acima do monitor.
+        """
+        root = self.root
+
+        # So restaura se estiver minimizada ou escondida: deiconify numa janela maximizada pode desmaximizar.
+        if root.state() in ('iconic', 'withdrawn'):
+            root.deiconify()
+
+        root.attributes('-topmost', True)
+        root.lift()
+        root.focus_force()
+
+        def release():
+            try:
+                root.attributes('-topmost', False)
+            except tk.TclError:
+                pass    # janela fechada nesse meio tempo
+
+        root.after(TOPMOST_PULSE_MS, release)
 
     @staticmethod
     def _keep_on_top(alert):

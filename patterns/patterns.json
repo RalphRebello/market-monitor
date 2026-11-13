@@ -12,7 +12,10 @@
     "Padrao 6: sempre em 1m; o candle 1 abre em final 1, logo o candle 8 abre em final 8: [8].",
     "sequences: first formado arma a sequencia no ativo; then formado depois aguarda a vela de entrada dele.",
     "Vela de entrada de then fechou verde: alerta amarelo e zera; vermelha ou doji: sem alerta, segue armada.",
-    "Nenhum candle do gatilho de first conta para then; o candle de alerta de first pode ser o 1o de then."
+    "Nenhum candle do gatilho de first conta para then; o candle de alerta de first pode ser o 1o de then.",
+    "first_extra: velas a mais exigidas logo depois do gatilho de first, so na sequencia (o padrao sozinho nao muda).",
+    "Com first_extra, a sequencia so arma quando essas velas fecharem nas cores pedidas; elas tambem nao contam para then.",
+    "Padrao 5 -> Padrao 1: first_extra R = o Padrao 5 da sequencia tem uma 13a vela vermelha."
   ],
   "interval": "1m",
   "patterns": [
@@ -68,6 +71,7 @@
     {
       "name": "Padrao 5 -> Padrao 1",
       "first": "Padrao 5",
+      "first_extra": "R",
       "then": "Padrao 1"
     }
   ]

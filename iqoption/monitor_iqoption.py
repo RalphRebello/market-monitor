@@ -13,7 +13,7 @@ from iqoption.settings import SETTINGS_FILE, load_settings, save_settings
 from iqoption.alarm import play_sequence_alarm
 from iqoption.monitor_base import (COLORS, SEQUENCE_COLOR, SEQUENCE_TEXT, STRIP_CANDLES, MonitorApp,
                                    normalize_symbol, pattern_title)
-from core.sequences import ARMED, COMPLETED, CONFIRMING, FAILED
+from core.sequences import ARMED, COMPLETED, CONFIRMING, EXTENDING, EXTRA_FAIL, FAILED
 from core.pattern_detector import (DIRECTIONS, GREEN, PATTERNS_FILE, PatternDetector, PatternError, candle_color,
                                    ms_to_datetime)
 
@@ -215,6 +215,7 @@ class AssetCard:
         """Situacao da sequencia neste ativo: aguardando o primeiro padrao ou armada aguardando o segundo."""
         armed      = self.app.tracker.armed_at(sequence, self.name) if self.name else None
         confirming = self.app.tracker.confirming_at(sequence, self.name) if self.name else None
+        extending  = self.app.tracker.extending_at(sequence, self.name) if self.name else None
 
         # Aguardando o primeiro: cinza. Armada, aguardando o segundo: amarelo, como o popup que vira.
         waiting = sequence.first if armed is None else sequence.then
@@ -223,6 +224,11 @@ class AssetCard:
         # Segundo formado: falta o candle de entrada dele fechar verde.
         if confirming is not None:
             waiting = f'vela de entrada {ms_to_datetime(confirming).strftime("%H:%M")} do {sequence.then} fechar verde'
+
+        # Primeiro formado de novo, aguardando as velas extras dele (vale so para a sequencia).
+        if extending is not None:
+            waiting = self.app.extra_text(sequence, *extending)
+            color   = SEQUENCE_COLOR
 
         self.canvas.create_text(6, y + 9, anchor='w', text=f'Sequencia {sequence.name} | Aguardando {waiting}',
                                 fill=color, font=('TkDefaultFont', 8, 'bold'))
@@ -501,9 +507,7 @@ class IQMonitorApp(MonitorApp):
 
     def _open_alert_card(self, name):
         """Clique no popup: traz a janela para a frente e mostra o cartao do ativo, criando-o se preciso."""
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+        self.bring_to_front()
 
         if name not in self.symbols:
             self.write_log(f'{name} nao esta mais aberto em {self.type_var.get()}; cartao nao aberto', 'error')
@@ -992,7 +996,7 @@ class IQMonitorApp(MonitorApp):
         signals, _results = detector.add_closed_candle(candle)
 
         # Primeiro a confirmacao das sequencias neste candle, depois os padroes que ele formou.
-        events = self.tracker.confirm(name, candle, self.active_sequences)
+        events = self.tracker.confirm(name, candle, detector.interval_ms, self.active_sequences)
 
         for sequence, kind, open_time in events:
             self._on_sequence_confirmed(name, sequence, kind, open_time, detector)
@@ -1066,9 +1070,21 @@ class IQMonitorApp(MonitorApp):
         self.write_log(f'{name} | {pattern_title(signal.pattern.name)} | entrada {entry}', 'buy')
         self._popup(signal, name, entry)
 
+    def extra_text(self, sequence, open_time, index):
+        """'vela 13 (HH:MM) do Padrao 5 fechar vermelha': a vela extra de first aguardada."""
+        first  = next(pattern for pattern in self.patterns if pattern.name == sequence.first)
+        number = len(first.trigger) + index + 1
+        color  = 'verde' if sequence.first_extra[index] == GREEN else 'vermelha'
+
+        return f'vela {number} ({ms_to_datetime(open_time).strftime("%H:%M")}) do {sequence.first} fechar {color}'
+
     def _on_sequence_event(self, name, sequence, kind, signal, detector):
         """Sequencia armada ou segundo padrao formado: so registra; o alerta espera o candle de entrada fechar."""
-        if kind == ARMED:
+        if kind == EXTENDING:
+            self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.first} formado, '
+                           f'aguardando a {self.extra_text(sequence, signal.entry_open_time, 0)}')
+
+        elif kind == ARMED:
             self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.first} formado, '
                            f'aguardando {sequence.then}')
 
@@ -1080,6 +1096,22 @@ class IQMonitorApp(MonitorApp):
     def _on_sequence_confirmed(self, name, sequence, kind, candle_open_time, detector):
         """Candle de entrada do segundo padrao fechou: verde gera o alerta amarelo e zera; senao segue armada."""
         when = ms_to_datetime(candle_open_time).strftime('%H:%M')
+
+        if kind == EXTENDING:
+            index = self.tracker.extending_at(sequence, name)[1]
+            self.write_log(f'{name} | Sequencia {sequence.name}: vela {when} do {sequence.first} bateu, '
+                           f'aguardando a {self.extra_text(sequence, candle_open_time, index)}')
+            return
+
+        if kind == ARMED:
+            self.write_log(f'{name} | Sequencia {sequence.name}: {sequence.first} completo com a vela extra, '
+                           f'aguardando {sequence.then}')
+            return
+
+        if kind == EXTRA_FAIL:
+            self.write_log(f'{name} | Sequencia {sequence.name}: vela {when} do {sequence.first} nao fechou na cor '
+                           f'exigida, esse {sequence.first} nao conta para a sequencia')
+            return
 
         if kind == FAILED:
             self.write_log(f'{name} | Sequencia {sequence.name}: vela {when} do {sequence.then} nao fechou verde, '
